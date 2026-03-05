@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build DOOM3D (Windows MinGW)",
+      "type": "shell",
+      "command": "C:/msys64/mingw64/bin/gcc.exe",
+      "args": [
+        "-std=c99",
+        "-Wall",
+        "-O2",
+
+        "-IC:/msys64/mingw64/include",
+        "-LC:/msys64/mingw64/lib",
+
+        "main.c",
+
+        "-o",
+        "doom3d.exe",
+
+        "-lmingw32",
+        "-lSDL2main",
+        "-lSDL2",
+        "-lopengl32",
+        "-lglu32",
+        "-lm"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$gcc"
+    }
+  ]
+}
