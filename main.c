@@ -7,6 +7,7 @@
  *   A/D         - Strafe left/right
  *   Mouse       - Look around (yaw + pitch)
  *   Left Click  - Shoot
+ *   1/2/3       - Switch weapon (Fist / Pistol / Shotgun)
  *   Space       - Jump
  *   +/-         - Increase/decrease light brightness
  *   L           - Cycle light color (white/red/blue)
@@ -50,13 +51,28 @@
 #define FLOOR_Y       0.0f
 #define CEIL_Y        3.0f
 
-#define MAX_ENEMIES   16
-#define ENEMY_SPEED   2.0f
-#define ENEMY_HEALTH  3
-#define SHOOT_COOLDOWN 0.25f
-#define MUZZLE_TIME   0.08f
+#define MAX_ENEMIES      32
+#define ENEMY_SPEED      2.5f
+#define ENEMY_HEALTH     5
+#define ENEMY_SIGHT_RANGE 18.0f
+#define ENEMY_ATTACK_RANGE 1.0f
+#define ENEMY_PATROL_RANGE 8.0f
 
-#define MAX_DECORATIONS 32
+#define MAX_DECORATIONS  64
+#define MAX_PICKUPS      64
+
+#define SHOOT_COOLDOWN_FIST   0.4f
+#define SHOOT_COOLDOWN_PISTOL 0.3f
+#define SHOOT_COOLDOWN_SHOTGUN 0.8f
+#define MUZZLE_TIME          0.08f
+
+#define FIST_DAMAGE     2
+#define PISTOL_DAMAGE   1
+#define SHOTGUN_DAMAGE  3
+#define FIST_RANGE      2.0f
+#define PISTOL_RANGE    50.0f
+#define SHOTGUN_RANGE   15.0f
+#define SHOTGUN_SPREAD  0.8f
 
 #define PI  3.14159265358979f
 #define DEG2RAD(x) ((x)*PI/180.0f)
@@ -82,7 +98,7 @@ static inline Vec3 v3norm(Vec3 a) { float l=v3len(a); if(l<1e-6f) return v3(0,0,
 
 typedef struct {
     int vi[4], ti[4], ni[4];
-    int count; /* 3 = triangle, 4 = quad */
+    int count;
 } ObjFace;
 
 typedef struct {
@@ -97,33 +113,24 @@ typedef struct {
 static int obj_load(ObjModel *m, const char *path) {
     memset(m, 0, sizeof(*m));
     FILE *f = fopen(path, "r");
-    if (!f) {
-        fprintf(stderr, "Cannot open OBJ: %s\n", path);
-        return 0;
-    }
+    if (!f) { fprintf(stderr, "Cannot open OBJ: %s\n", path); return 0; }
     char line[512];
     while (fgets(line, sizeof(line), f)) {
         if (line[0]=='v' && line[1]==' ') {
             if (m->vert_count < MAX_OBJ_VERTS) {
-                sscanf(line+2, "%f %f %f",
-                       &m->verts[m->vert_count][0],
-                       &m->verts[m->vert_count][1],
-                       &m->verts[m->vert_count][2]);
+                sscanf(line+2, "%f %f %f", &m->verts[m->vert_count][0],
+                       &m->verts[m->vert_count][1], &m->verts[m->vert_count][2]);
                 m->vert_count++;
             }
         } else if (line[0]=='v' && line[1]=='n') {
             if (m->norm_count < MAX_OBJ_NORMS) {
-                sscanf(line+3, "%f %f %f",
-                       &m->norms[m->norm_count][0],
-                       &m->norms[m->norm_count][1],
-                       &m->norms[m->norm_count][2]);
+                sscanf(line+3, "%f %f %f", &m->norms[m->norm_count][0],
+                       &m->norms[m->norm_count][1], &m->norms[m->norm_count][2]);
                 m->norm_count++;
             }
         } else if (line[0]=='v' && line[1]=='t') {
             if (m->uv_count < MAX_OBJ_UVS) {
-                sscanf(line+3, "%f %f",
-                       &m->uvs[m->uv_count][0],
-                       &m->uvs[m->uv_count][1]);
+                sscanf(line+3, "%f %f", &m->uvs[m->uv_count][0], &m->uvs[m->uv_count][1]);
                 m->uv_count++;
             }
         } else if (line[0]=='f' && line[1]==' ') {
@@ -134,18 +141,11 @@ static int obj_load(ObjModel *m, const char *path) {
                 int idx = 0;
                 while (*p && idx < 4) {
                     int vi=0, ti=0, ni=0;
-                    if (sscanf(p, "%d/%d/%d", &vi, &ti, &ni) == 3) {
-                        /* v/vt/vn */
-                    } else if (sscanf(p, "%d//%d", &vi, &ni) == 2) {
-                        ti = 0;
-                    } else if (sscanf(p, "%d/%d", &vi, &ti) == 2) {
-                        ni = 0;
-                    } else {
-                        sscanf(p, "%d", &vi);
-                    }
-                    face->vi[idx] = vi - 1;
-                    face->ti[idx] = ti - 1;
-                    face->ni[idx] = ni - 1;
+                    if (sscanf(p, "%d/%d/%d", &vi, &ti, &ni) == 3) { }
+                    else if (sscanf(p, "%d//%d", &vi, &ni) == 2) { ti = 0; }
+                    else if (sscanf(p, "%d/%d", &vi, &ti) == 2) { ni = 0; }
+                    else { sscanf(p, "%d", &vi); }
+                    face->vi[idx] = vi - 1; face->ti[idx] = ti - 1; face->ni[idx] = ni - 1;
                     idx++;
                     while (*p && *p != ' ' && *p != '\t' && *p != '\n' && *p != '\r') p++;
                     while (*p == ' ' || *p == '\t') p++;
@@ -165,8 +165,7 @@ static void obj_build_display_list(ObjModel *m) {
     glNewList(m->display_list, GL_COMPILE);
     for (int i = 0; i < m->face_count; i++) {
         ObjFace *face = &m->faces[i];
-        if (face->count == 3) glBegin(GL_TRIANGLES);
-        else                  glBegin(GL_QUADS);
+        glBegin(face->count == 3 ? GL_TRIANGLES : GL_QUADS);
         for (int j = 0; j < face->count; j++) {
             if (face->ni[j] >= 0 && face->ni[j] < m->norm_count)
                 glNormal3fv(m->norms[face->ni[j]]);
@@ -180,15 +179,11 @@ static void obj_build_display_list(ObjModel *m) {
     glEndList();
 }
 
-static void obj_draw(const ObjModel *m) {
-    glCallList(m->display_list);
-}
+static void obj_draw(const ObjModel *m) { glCallList(m->display_list); }
 
-/* ─────────────────── Global Models (loaded from files) ─────────────────── */
+/* ──────────────────── Global Models ────────────────────────────────────── */
 
-static ObjModel model_cube;
-static ObjModel model_enemy;
-static ObjModel model_barrel;
+static ObjModel model_cube, model_enemy, model_barrel;
 
 static int load_all_models(const char *asset_dir) {
     char path[512];
@@ -209,44 +204,81 @@ static void build_all_display_lists(void) {
 
 /* ──────────────────────────────── Level ────────────────────────────────── */
 
-/*  Map key:
- *  '#' = wall      '.' = floor (empty)
- *  'E' = enemy     'P' = player spawn
- *  'B' = barrel    'C' = crate
+/* 40x40 map with multiple rooms, corridors, and varied geometry
+ *  '#' = wall      '.' = floor       'E' = enemy spawn
+ *  'P' = player    'B' = barrel      'C' = crate
  */
 static const char *MAP_ROWS[] = {
-    "####################",
-    "#P.................#",
-    "#..................#",
-    "#...B####.....B....#",
-    "#....#..#..........#",
-    "#....#..#....C.....#",
-    "#....####..........#",
-    "#.......E..........#",
-    "#..B...............#",
-    "#.....#####........#",
-    "#.....#...#....B...#",
-    "#.....#.E.#........#",
-    "#.....#...#........#",
-    "#.....#####........#",
-    "#..C...............#",
-    "#...E.........C....#",
-    "#..................#",
-    "#..######....B.....#",
-    "#..................#",
-    "####################",
+    "########################################",
+    "#P.........#.........#.................#",
+    "#..........#.........#..............E..#",
+    "#..........#....E....#......####.......#",
+    "#...B......#.........#......#..#.......#",
+    "#..........###..######......#..#.......#",
+    "#..........#.........#......####.......#",
+    "#..........#.........#.........E.......#",
+    "#..........#.........#.................#",
+    "####.###...#....B....#..........####...#",
+    "#..........#.........#..........#..#...#",
+    "#.....................B.........#..#...#",
+    "#..........#.........#..........####...#",
+    "#..B.......#..E......#.................#",
+    "#..........###.#######.................#",
+    "#..........#.................####......#",
+    "####..######.................#..#......#",
+    "#..........#.........E.......#..#......#",
+    "#..........#.................####......#",
+    "#..E.......#...........................#",
+    "#..........#####.####..................#",
+    "#..........#.........#.....E...........#",
+    "#..........#....B....#.................#",
+    "#..........#.........#.........####....#",
+    "####.###...#.........#.........#..#....#",
+    "#..........#.........#.........#..#....#",
+    "#..........###..######.........####....#",
+    "#.....C....#.........#.................#",
+    "#..........#.........#.................#",
+    "#..E.......#....E....#...E.............#",
+    "#..........#.........#.................#",
+    "####.###...#.........####.######.......#",
+    "#..........#.........................B.#",
+    "#..........#..C......#.................#",
+    "#..B.......#.........#.......E.........#",
+    "#..........###########.................#",
+    "#..............C.......................#",
+    "#...E..................................#",
+    "#................................E.....#",
+    "########################################",
 };
-#define MAP_ROWS_N  20
-#define MAP_COLS    20
+#define MAP_ROWS_N  40
+#define MAP_COLS    40
 
 static int map_is_wall(int col, int row) {
     if(row<0||row>=MAP_ROWS_N||col<0||col>=MAP_COLS) return 1;
     return MAP_ROWS[row][col]=='#';
 }
 
+/* ──────────────── Line-of-sight check (Bresenham-style) ────────────────── */
+
+static int has_line_of_sight(float x1, float z1, float x2, float z2) {
+    float dx = x2 - x1, dz = z2 - z1;
+    float dist = sqrtf(dx*dx + dz*dz);
+    if(dist < 0.1f) return 1;
+    float step = 0.5f;
+    int steps = (int)(dist / step) + 1;
+    for(int i = 1; i < steps; i++) {
+        float t = (float)i / steps;
+        float cx = x1 + dx*t, cz = z1 + dz*t;
+        if(map_is_wall((int)floorf(cx), (int)floorf(cz)))
+            return 0;
+    }
+    return 1;
+}
+
 /* ──────────────────────────── Texture gen ──────────────────────────────── */
 
 static GLuint tex_wall, tex_floor, tex_ceil, tex_enemy, tex_crate, tex_barrel;
+static GLuint tex_pickup_health, tex_pickup_ammo, tex_pickup_armor;
 
 static void make_texture(GLuint *out, int w, int h,
                          void (*fill)(unsigned char*,int,int,int,int))
@@ -264,17 +296,13 @@ static void make_texture(GLuint *out, int w, int h,
 }
 
 static void fill_wall(unsigned char *px, int x, int y, int w, int h) {
-    int bw=w/4, bh=h/4;
-    int row=y/bh;
-    int ox=(row%2)*(bw/2);
+    int bw=w/4, bh=h/4, row=y/bh, ox=(row%2)*(bw/2);
     int mx=(x+ox)%bw, my=y%bh;
     int mortar = (mx<2)||(my<2);
     int idx = 3*(y*w+x);
     if(mortar){ px[idx]=160; px[idx+1]=150; px[idx+2]=140; }
-    else       { int v=180+(rand()%20-10);
-                 px[idx]=(unsigned char)v;
-                 px[idx+1]=(unsigned char)(v-30);
-                 px[idx+2]=(unsigned char)(v-50); }
+    else { int v=180+(rand()%20-10);
+           px[idx]=(unsigned char)v; px[idx+1]=(unsigned char)(v-30); px[idx+2]=(unsigned char)(v-50); }
     (void)h;
 }
 
@@ -297,38 +325,62 @@ static void fill_enemy_tex(unsigned char *px, int x, int y, int w, int h) {
     float cx=x/(float)w, cy=y/(float)h;
     int idx = 3*(y*w+x);
     px[idx]=160; px[idx+1]=30; px[idx+2]=30;
-    if(((cx>0.2f&&cx<0.35f)||(cx>0.65f&&cx<0.8f))&&cy>0.3f&&cy<0.5f){
-        px[idx]=255; px[idx+1]=220; px[idx+2]=0;
-    }
-    if(cx>0.2f&&cx<0.8f&&cy>0.65f&&cy<0.75f){
-        px[idx]=20; px[idx+1]=20; px[idx+2]=20;
-    }
-    if(((cx>0.1f&&cx<0.25f)||(cx>0.75f&&cx<0.9f))&&cy>0.05f&&cy<0.25f){
-        px[idx]=100; px[idx+1]=20; px[idx+2]=20;
-    }
+    if(((cx>0.2f&&cx<0.35f)||(cx>0.65f&&cx<0.8f))&&cy>0.3f&&cy<0.5f)
+        { px[idx]=255; px[idx+1]=220; px[idx+2]=0; }
+    if(cx>0.2f&&cx<0.8f&&cy>0.65f&&cy<0.75f)
+        { px[idx]=20; px[idx+1]=20; px[idx+2]=20; }
+    if(((cx>0.1f&&cx<0.25f)||(cx>0.75f&&cx<0.9f))&&cy>0.05f&&cy<0.25f)
+        { px[idx]=100; px[idx+1]=20; px[idx+2]=20; }
     (void)h;
 }
 
 static void fill_crate(unsigned char *px, int x, int y, int w, int h) {
-    int bdr = (x<3||x>=w-3||y<3||y>=h-3);
-    int cross = (abs(x-w/2)<3)||(abs(y-h/2)<3);
+    int bdr=(x<3||x>=w-3||y<3||y>=h-3), cross=(abs(x-w/2)<3)||(abs(y-h/2)<3);
     int idx = 3*(y*w+x);
     if(bdr||cross) { px[idx]=100; px[idx+1]=70; px[idx+2]=30; }
-    else           { int v=160+(rand()%20-10);
-                     px[idx]=(unsigned char)v;
-                     px[idx+1]=(unsigned char)(v-20);
-                     px[idx+2]=(unsigned char)(v-60); }
+    else { int v=160+(rand()%20-10);
+           px[idx]=(unsigned char)v; px[idx+1]=(unsigned char)(v-20); px[idx+2]=(unsigned char)(v-60); }
     (void)h;
 }
 
 static void fill_barrel_tex(unsigned char *px, int x, int y, int w, int h) {
-    int stripe = ((y/(h/6))%2==0);
-    int idx = 3*(y*w+x);
-    if(stripe) { px[idx]=80; px[idx+1]=100; px[idx+2]=80; }
-    else       { px[idx]=60; px[idx+1]=80;  px[idx+2]=60; }
-    int band = (y%(h/6) < 2);
-    if(band) { px[idx]=120; px[idx+1]=120; px[idx+2]=130; }
+    int stripe=((y/(h/6))%2==0), idx=3*(y*w+x);
+    if(stripe){px[idx]=80;px[idx+1]=100;px[idx+2]=80;}
+    else{px[idx]=60;px[idx+1]=80;px[idx+2]=60;}
+    if(y%(h/6)<2){px[idx]=120;px[idx+1]=120;px[idx+2]=130;}
     (void)w;
+}
+
+/* Pickup textures: health=green cross, ammo=yellow bullets, armor=blue shield */
+static void fill_pickup_health(unsigned char *px, int x, int y, int w, int h) {
+    int idx=3*(y*w+x);
+    float cx=x/(float)w-0.5f, cy=y/(float)h-0.5f;
+    int cross = (fabsf(cx)<0.15f && fabsf(cy)<0.4f) || (fabsf(cy)<0.15f && fabsf(cx)<0.4f);
+    if(cross) { px[idx]=30; px[idx+1]=220; px[idx+2]=30; }
+    else      { px[idx]=200; px[idx+1]=200; px[idx+2]=200; }
+    (void)h;
+}
+
+static void fill_pickup_ammo(unsigned char *px, int x, int y, int w, int h) {
+    int idx=3*(y*w+x);
+    float cx=x/(float)w, cy=y/(float)h;
+    /* Bullet shapes */
+    int bullet = (cy>0.3f&&cy<0.8f) && ((cx>0.15f&&cx<0.3f)||(cx>0.4f&&cx<0.55f)||(cx>0.65f&&cx<0.8f));
+    int tip = (cy>0.1f&&cy<0.3f) && ((cx>0.18f&&cx<0.27f)||(cx>0.43f&&cx<0.52f)||(cx>0.68f&&cx<0.77f));
+    if(bullet)   { px[idx]=200; px[idx+1]=170; px[idx+2]=50; }
+    else if(tip) { px[idx]=220; px[idx+1]=140; px[idx+2]=40; }
+    else         { px[idx]=60;  px[idx+1]=60;  px[idx+2]=60; }
+    (void)h;
+}
+
+static void fill_pickup_armor(unsigned char *px, int x, int y, int w, int h) {
+    int idx=3*(y*w+x);
+    float cx=x/(float)w-0.5f, cy=y/(float)h-0.5f;
+    /* Shield shape: circle-ish */
+    float d = cx*cx + cy*cy;
+    if(d < 0.18f && cy < 0.1f) { px[idx]=50; px[idx+1]=80; px[idx+2]=220; }
+    else                         { px[idx]=100; px[idx+1]=100; px[idx+2]=100; }
+    (void)h;
 }
 
 static void init_textures(void) {
@@ -339,16 +391,33 @@ static void init_textures(void) {
     make_texture(&tex_enemy,  64,64,fill_enemy_tex);
     make_texture(&tex_crate,  64,64,fill_crate);
     make_texture(&tex_barrel, 64,64,fill_barrel_tex);
+    make_texture(&tex_pickup_health, 32,32,fill_pickup_health);
+    make_texture(&tex_pickup_ammo,   32,32,fill_pickup_ammo);
+    make_texture(&tex_pickup_armor,  32,32,fill_pickup_armor);
 }
 
-/* ──────────────────────────────── Enemy ────────────────────────────────── */
+/* ──────────────────────── Enemy with AI States ────────────────────────── */
+
+typedef enum {
+    AI_IDLE,       /* standing still, hasn't seen player */
+    AI_PATROL,     /* wandering randomly near spawn point */
+    AI_CHASE,      /* actively pursuing player (has LOS)  */
+    AI_SEARCH,     /* lost LOS, moving to last known pos  */
+    AI_ATTACK      /* close enough to melee               */
+} AIState;
 
 typedef struct {
-    Vec3  pos;
-    int   health;
-    float pain_timer;
-    int   alive;
-    float bob_phase;
+    Vec3    pos;
+    Vec3    spawn_pos;         /* remember where we spawned for patrol */
+    Vec3    last_known_player; /* last position where we saw the player */
+    int     health;
+    float   pain_timer;
+    int     alive;
+    float   bob_phase;
+    AIState state;
+    float   state_timer;       /* time in current state */
+    float   patrol_angle;      /* current wander direction */
+    float   attack_cooldown;
 } Enemy;
 
 static Enemy enemies[MAX_ENEMIES];
@@ -356,23 +425,25 @@ static int   enemy_count = 0;
 
 static void enemy_spawn(float x, float z) {
     if(enemy_count>=MAX_ENEMIES) return;
-    enemies[enemy_count].pos       = v3(x, 0.8f, z);
-    enemies[enemy_count].health    = ENEMY_HEALTH;
-    enemies[enemy_count].alive     = 1;
-    enemies[enemy_count].pain_timer= 0;
-    enemies[enemy_count].bob_phase = (float)(rand()%100)/100.0f * 2*PI;
+    Enemy *e = &enemies[enemy_count];
+    e->pos          = v3(x, 0.8f, z);
+    e->spawn_pos    = v3(x, 0.8f, z);
+    e->last_known_player = v3(x, 0.8f, z);
+    e->health       = ENEMY_HEALTH;
+    e->alive        = 1;
+    e->pain_timer   = 0;
+    e->bob_phase    = (float)(rand()%100)/100.0f * 2*PI;
+    e->state        = AI_IDLE;
+    e->state_timer  = 0;
+    e->patrol_angle = (float)(rand()%360) * PI/180.0f;
+    e->attack_cooldown = 0;
     enemy_count++;
 }
 
 /* ──────────────────────────── Decorations ──────────────────────────────── */
 
 typedef enum { DECO_BARREL, DECO_CRATE } DecoType;
-
-typedef struct {
-    Vec3     pos;
-    DecoType type;
-    float    rotation;
-} Decoration;
+typedef struct { Vec3 pos; DecoType type; float rotation; } Decoration;
 
 static Decoration decorations[MAX_DECORATIONS];
 static int deco_count = 0;
@@ -385,16 +456,36 @@ static void deco_spawn(float x, float z, DecoType type) {
     deco_count++;
 }
 
+/* ──────────────────────────── Pickups ──────────────────────────────────── */
+
+typedef enum { PICKUP_HEALTH, PICKUP_AMMO, PICKUP_ARMOR } PickupType;
+typedef struct { Vec3 pos; PickupType type; int active; float bob_phase; } Pickup;
+
+static Pickup pickups[MAX_PICKUPS];
+static int pickup_count = 0;
+
+static void pickup_spawn(float x, float z, PickupType type) {
+    if(pickup_count>=MAX_PICKUPS) return;
+    pickups[pickup_count].pos = v3(x, FLOOR_Y + 0.3f, z);
+    pickups[pickup_count].type = type;
+    pickups[pickup_count].active = 1;
+    pickups[pickup_count].bob_phase = (float)(rand()%100)/100.0f * 2*PI;
+    pickup_count++;
+}
+
 /* ──────────────────────────────── Player ───────────────────────────────── */
+
+typedef enum { WPN_FIST=0, WPN_PISTOL=1, WPN_SHOTGUN=2 } WeaponType;
 
 typedef struct {
     Vec3  pos;
-    float yaw;
-    float pitch;
-    float vy;
+    float yaw, pitch, vy;
     int   on_ground;
     int   health;
-    int   ammo;
+    int   armor;
+    int   ammo_pistol;
+    int   ammo_shotgun;
+    WeaponType weapon;
     float shoot_cd;
     float muzzle_flash;
 } Player;
@@ -414,11 +505,9 @@ static float light_brightness = 1.0f;
 #define LIGHT_MAX 2.0f
 #define LIGHT_STEP 0.1f
 
-static int light_color_mode = 0;   /* 0=white, 1=red, 2=blue */
+static int light_color_mode = 0;
 static int flashlight_on = 1;
-static float ambient_light_pos[4] = {10.0f, 2.5f, 10.0f, 1.0f};
-
-/* Help screen toggle */
+static float ambient_light_pos[4] = {20.0f, 2.5f, 20.0f, 1.0f};
 static int show_help = 0;
 
 /* ─────────────────────────── Collision helper ──────────────────────────── */
@@ -435,45 +524,83 @@ static int collides_map(float x, float z) {
     return 0;
 }
 
+/* ───────────── Scatter pickups randomly on open floor tiles ─────────── */
+
+static void scatter_pickups(int count_health, int count_ammo, int count_armor) {
+    /* Collect all open floor tiles */
+    int open_tiles[MAP_ROWS_N * MAP_COLS][2];
+    int open_count = 0;
+    for(int r=1;r<MAP_ROWS_N-1;r++)
+        for(int c=1;c<MAP_COLS-1;c++)
+            if(MAP_ROWS[r][c]=='.' ) {
+                open_tiles[open_count][0] = c;
+                open_tiles[open_count][1] = r;
+                open_count++;
+            }
+    /* Shuffle (Fisher-Yates) */
+    for(int i=open_count-1;i>0;i--) {
+        int j=rand()%(i+1);
+        int tc=open_tiles[i][0], tr=open_tiles[i][1];
+        open_tiles[i][0]=open_tiles[j][0]; open_tiles[i][1]=open_tiles[j][1];
+        open_tiles[j][0]=tc; open_tiles[j][1]=tr;
+    }
+    int idx=0;
+    for(int i=0;i<count_health && idx<open_count;i++,idx++)
+        pickup_spawn(open_tiles[idx][0]+0.5f, open_tiles[idx][1]+0.5f, PICKUP_HEALTH);
+    for(int i=0;i<count_ammo && idx<open_count;i++,idx++)
+        pickup_spawn(open_tiles[idx][0]+0.5f, open_tiles[idx][1]+0.5f, PICKUP_AMMO);
+    for(int i=0;i<count_armor && idx<open_count;i++,idx++)
+        pickup_spawn(open_tiles[idx][0]+0.5f, open_tiles[idx][1]+0.5f, PICKUP_ARMOR);
+}
+
 /* ──────────────────────────── Init from map ────────────────────────────── */
 
 static void init_level(void) {
-    enemy_count=0;
-    deco_count=0;
+    enemy_count=0; deco_count=0; pickup_count=0;
     for(int r=0;r<MAP_ROWS_N;r++) {
         for(int c=0;c<MAP_COLS;c++) {
             char ch=MAP_ROWS[r][c];
             if(ch=='P') {
-                player.pos    = v3(c+0.5f, PLAYER_HEIGHT, r+0.5f);
-                player.yaw    = 0;
-                player.pitch  = 0;
-                player.vy     = 0;
-                player.on_ground = 1;
-                player.health = 100;
-                player.ammo   = 50;
-                player.shoot_cd = 0;
-                player.muzzle_flash = 0;
-            } else if(ch=='E') {
-                enemy_spawn(c+0.5f, r+0.5f);
-            } else if(ch=='B') {
-                deco_spawn(c+0.5f, r+0.5f, DECO_BARREL);
-            } else if(ch=='C') {
-                deco_spawn(c+0.5f, r+0.5f, DECO_CRATE);
-            }
+                player.pos = v3(c+0.5f, PLAYER_HEIGHT, r+0.5f);
+                player.yaw=0; player.pitch=0; player.vy=0;
+                player.on_ground=1;
+                player.health=100; player.armor=0;
+                player.ammo_pistol=50; player.ammo_shotgun=10;
+                player.weapon=WPN_PISTOL;
+                player.shoot_cd=0; player.muzzle_flash=0;
+            } else if(ch=='E') enemy_spawn(c+0.5f, r+0.5f);
+              else if(ch=='B') deco_spawn(c+0.5f, r+0.5f, DECO_BARREL);
+              else if(ch=='C') deco_spawn(c+0.5f, r+0.5f, DECO_CRATE);
         }
     }
+    /* Scatter random pickups across open areas */
+    scatter_pickups(12, 15, 8);
 }
 
 /* ──────────────────────────── Game update ──────────────────────────────── */
 
-static int game_over = 0;
-static int game_win  = 0;
+static int game_over = 0, game_win = 0;
 static float game_time = 0;
 
 static void shoot(void) {
-    if(player.shoot_cd>0||player.ammo<=0) return;
-    player.ammo--;
-    player.shoot_cd   = SHOOT_COOLDOWN;
+    float cooldown=0, range=0;
+    int damage=0;
+    switch(player.weapon) {
+        case WPN_FIST:
+            cooldown=SHOOT_COOLDOWN_FIST; range=FIST_RANGE; damage=FIST_DAMAGE; break;
+        case WPN_PISTOL:
+            if(player.ammo_pistol<=0) return;
+            cooldown=SHOOT_COOLDOWN_PISTOL; range=PISTOL_RANGE; damage=PISTOL_DAMAGE; break;
+        case WPN_SHOTGUN:
+            if(player.ammo_shotgun<=0) return;
+            cooldown=SHOOT_COOLDOWN_SHOTGUN; range=SHOTGUN_RANGE; damage=SHOTGUN_DAMAGE; break;
+    }
+    if(player.shoot_cd>0) return;
+
+    if(player.weapon==WPN_PISTOL) player.ammo_pistol--;
+    if(player.weapon==WPN_SHOTGUN) player.ammo_shotgun--;
+
+    player.shoot_cd = cooldown;
     player.muzzle_flash = MUZZLE_TIME;
 
     Vec3 fwd = player_forward();
@@ -481,11 +608,15 @@ static void shoot(void) {
         if(!enemies[i].alive) continue;
         Vec3 d = v3sub(enemies[i].pos, player.pos);
         float along = v3dot(d, fwd);
-        if(along<0.5f) continue;
+        if(along<0.5f || along>range) continue;
         Vec3 closest = v3sub(d, v3scale(fwd, along));
-        if(v3len(closest)<0.55f) {
-            enemies[i].health--;
+        float hit_radius = (player.weapon==WPN_SHOTGUN) ? SHOTGUN_SPREAD : 0.55f;
+        if(v3len(closest) < hit_radius) {
+            enemies[i].health -= damage;
             enemies[i].pain_timer = 0.2f;
+            /* Getting shot alerts the enemy immediately */
+            enemies[i].state = AI_CHASE;
+            enemies[i].last_known_player = player.pos;
             if(enemies[i].health<=0) {
                 enemies[i].alive=0;
                 int alive=0;
@@ -503,7 +634,7 @@ static void update(float dt) {
     const Uint8 *keys = SDL_GetKeyboardState(NULL);
     Vec3 fwd_xz = v3(sinf(player.yaw),0,cosf(player.yaw));
     Vec3 rgt_xz = v3(cosf(player.yaw),0,-sinf(player.yaw));
-    Vec3 move   = v3(0,0,0);
+    Vec3 move = v3(0,0,0);
     if(keys[SDL_SCANCODE_W]) move=v3add(move,fwd_xz);
     if(keys[SDL_SCANCODE_S]) move=v3sub(move,fwd_xz);
     if(keys[SDL_SCANCODE_A]) move=v3add(move,rgt_xz);
@@ -512,8 +643,7 @@ static void update(float dt) {
     float ml=v3len(move);
     if(ml>0) {
         move=v3scale(move,MOVE_SPEED*dt/ml);
-        float nx=player.pos.x+move.x;
-        float nz=player.pos.z+move.z;
+        float nx=player.pos.x+move.x, nz=player.pos.z+move.z;
         if(!collides_map(nx, player.pos.z)) player.pos.x=nx;
         if(!collides_map(player.pos.x, nz)) player.pos.z=nz;
     }
@@ -521,14 +651,10 @@ static void update(float dt) {
     if(!player.on_ground) player.vy-=GRAVITY*dt;
     player.pos.y+=player.vy*dt;
     if(player.pos.y<=PLAYER_HEIGHT) {
-        player.pos.y=PLAYER_HEIGHT;
-        player.vy=0;
-        player.on_ground=1;
+        player.pos.y=PLAYER_HEIGHT; player.vy=0; player.on_ground=1;
     }
-
-    if(keys[SDL_SCANCODE_SPACE]&&player.on_ground){
-        player.vy=JUMP_VEL;
-        player.on_ground=0;
+    if(keys[SDL_SCANCODE_SPACE]&&player.on_ground) {
+        player.vy=JUMP_VEL; player.on_ground=0;
     }
 
     if(player.shoot_cd>0) player.shoot_cd-=dt;
@@ -541,27 +667,179 @@ static void update(float dt) {
     if(keys[SDL_SCANCODE_LEFT])  ambient_light_pos[0] -= lms;
     if(keys[SDL_SCANCODE_RIGHT]) ambient_light_pos[0] += lms;
 
-    /* Enemies */
+    /* ─── Enemy AI ─── */
     for(int i=0;i<enemy_count;i++) {
-        if(!enemies[i].alive) continue;
-        if(enemies[i].pain_timer>0) enemies[i].pain_timer-=dt;
-        enemies[i].bob_phase += dt * 3.0f;
+        Enemy *e = &enemies[i];
+        if(!e->alive) continue;
+        if(e->pain_timer>0) e->pain_timer-=dt;
+        if(e->attack_cooldown>0) e->attack_cooldown-=dt;
+        e->bob_phase += dt * 3.0f;
+        e->state_timer += dt;
 
-        Vec3 d=v3sub(player.pos, enemies[i].pos);
-        d.y=0;
-        float dist=v3len(d);
-        if(dist>0.01f&&dist<15.0f) {
-            Vec3 dir=v3scale(d,1.0f/dist);
-            float spd=ENEMY_SPEED*dt;
-            float nx=enemies[i].pos.x+dir.x*spd;
-            float nz=enemies[i].pos.z+dir.z*spd;
-            if(!collides_map(nx,enemies[i].pos.z)) enemies[i].pos.x=nx;
-            if(!collides_map(enemies[i].pos.x,nz)) enemies[i].pos.z=nz;
+        Vec3 to_player = v3sub(player.pos, e->pos);
+        to_player.y = 0;
+        float dist = v3len(to_player);
+        int can_see = (dist < ENEMY_SIGHT_RANGE) &&
+                      has_line_of_sight(e->pos.x, e->pos.z, player.pos.x, player.pos.z);
+
+        /* State transitions */
+        switch(e->state) {
+            case AI_IDLE:
+                if(can_see) {
+                    e->state = AI_CHASE;
+                    e->last_known_player = player.pos;
+                    e->state_timer = 0;
+                } else if(e->state_timer > 2.0f + (rand()%30)/10.0f) {
+                    e->state = AI_PATROL;
+                    e->patrol_angle += (float)(rand()%314 - 157)/100.0f;
+                    e->state_timer = 0;
+                }
+                break;
+
+            case AI_PATROL: {
+                if(can_see) {
+                    e->state = AI_CHASE;
+                    e->last_known_player = player.pos;
+                    e->state_timer = 0;
+                    break;
+                }
+                /* Wander near spawn */
+                float px = e->pos.x + sinf(e->patrol_angle)*ENEMY_SPEED*0.5f*dt;
+                float pz = e->pos.z + cosf(e->patrol_angle)*ENEMY_SPEED*0.5f*dt;
+                /* Stay near spawn */
+                float dx_s = px - e->spawn_pos.x, dz_s = pz - e->spawn_pos.z;
+                if(dx_s*dx_s+dz_s*dz_s > ENEMY_PATROL_RANGE*ENEMY_PATROL_RANGE) {
+                    /* Turn back toward spawn */
+                    e->patrol_angle = atan2f(e->spawn_pos.x - e->pos.x, e->spawn_pos.z - e->pos.z);
+                }
+                if(!collides_map(px, e->pos.z)) e->pos.x = px;
+                else e->patrol_angle += PI*0.5f;
+                if(!collides_map(e->pos.x, pz)) e->pos.z = pz;
+                else e->patrol_angle += PI*0.5f;
+
+                if(e->state_timer > 3.0f + (rand()%20)/10.0f) {
+                    e->state = AI_IDLE;
+                    e->state_timer = 0;
+                }
+                break;
+            }
+
+            case AI_CHASE:
+                if(dist < ENEMY_ATTACK_RANGE) {
+                    e->state = AI_ATTACK;
+                    e->state_timer = 0;
+                } else if(!can_see && e->state_timer > 0.5f) {
+                    /* Lost sight — go to last known position */
+                    e->state = AI_SEARCH;
+                    e->state_timer = 0;
+                } else {
+                    if(can_see) e->last_known_player = player.pos;
+                    /* Chase with wall avoidance */
+                    Vec3 dir = v3norm(to_player);
+                    float spd = ENEMY_SPEED * dt;
+                    float nx = e->pos.x + dir.x*spd;
+                    float nz = e->pos.z + dir.z*spd;
+                    if(!collides_map(nx, e->pos.z)) e->pos.x = nx;
+                    else {
+                        /* Try sliding along wall */
+                        float slide_x = e->pos.x + dir.x*spd*0.5f;
+                        float slide_z = e->pos.z + dir.z*spd;
+                        if(!collides_map(slide_x, slide_z)) { e->pos.x=slide_x; e->pos.z=slide_z; }
+                    }
+                    if(!collides_map(e->pos.x, nz)) e->pos.z = nz;
+                    else {
+                        float slide_x = e->pos.x + dir.x*spd;
+                        float slide_z = e->pos.z + dir.z*spd*0.5f;
+                        if(!collides_map(slide_x, slide_z)) { e->pos.x=slide_x; e->pos.z=slide_z; }
+                    }
+                }
+                break;
+
+            case AI_SEARCH: {
+                if(can_see) {
+                    e->state = AI_CHASE;
+                    e->last_known_player = player.pos;
+                    e->state_timer = 0;
+                    break;
+                }
+                /* Move toward last known player position */
+                Vec3 to_last = v3sub(e->last_known_player, e->pos);
+                to_last.y = 0;
+                float dl = v3len(to_last);
+                if(dl > 0.5f) {
+                    Vec3 dir = v3scale(to_last, 1.0f/dl);
+                    float spd = ENEMY_SPEED * 0.7f * dt;
+                    float nx = e->pos.x + dir.x*spd;
+                    float nz = e->pos.z + dir.z*spd;
+                    if(!collides_map(nx, e->pos.z)) e->pos.x = nx;
+                    if(!collides_map(e->pos.x, nz)) e->pos.z = nz;
+                } else {
+                    /* Reached last known pos, didn't find player */
+                    e->state = AI_IDLE;
+                    e->state_timer = 0;
+                }
+                if(e->state_timer > 5.0f) {
+                    e->state = AI_IDLE;
+                    e->state_timer = 0;
+                }
+                break;
+            }
+
+            case AI_ATTACK:
+                if(dist > ENEMY_ATTACK_RANGE * 1.5f) {
+                    e->state = AI_CHASE;
+                    e->state_timer = 0;
+                }
+                if(e->attack_cooldown <= 0 && dist < ENEMY_ATTACK_RANGE * 1.2f) {
+                    /* Deal damage - reduced by armor */
+                    int dmg = 10;
+                    if(player.armor > 0) {
+                        int armor_absorb = dmg / 2;
+                        if(armor_absorb > player.armor) armor_absorb = player.armor;
+                        player.armor -= armor_absorb;
+                        dmg -= armor_absorb;
+                    }
+                    player.health -= dmg;
+                    if(player.health<=0) { player.health=0; game_over=1; }
+                    e->attack_cooldown = 0.8f;
+                }
+                break;
         }
 
-        if(dist<0.8f) {
-            player.health-=(int)(20*dt);
-            if(player.health<=0) { player.health=0; game_over=1; }
+        /* Alert nearby enemies when one sees the player */
+        if(can_see && (e->state == AI_CHASE || e->state == AI_ATTACK)) {
+            for(int j=0;j<enemy_count;j++) {
+                if(j==i || !enemies[j].alive) continue;
+                if(enemies[j].state == AI_IDLE || enemies[j].state == AI_PATROL) {
+                    Vec3 dd = v3sub(enemies[j].pos, e->pos);
+                    dd.y = 0;
+                    if(v3len(dd) < 8.0f) {
+                        enemies[j].state = AI_SEARCH;
+                        enemies[j].last_known_player = player.pos;
+                        enemies[j].state_timer = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Pickup collection */
+    for(int i=0;i<pickup_count;i++) {
+        if(!pickups[i].active) continue;
+        pickups[i].bob_phase += dt * 3.0f;
+        float dx=player.pos.x-pickups[i].pos.x, dz=player.pos.z-pickups[i].pos.z;
+        if(dx*dx+dz*dz < 1.0f) {
+            switch(pickups[i].type) {
+                case PICKUP_HEALTH:
+                    if(player.health<100) { player.health+=25; if(player.health>100)player.health=100; pickups[i].active=0; }
+                    break;
+                case PICKUP_AMMO:
+                    player.ammo_pistol+=15; player.ammo_shotgun+=4; pickups[i].active=0;
+                    break;
+                case PICKUP_ARMOR:
+                    if(player.armor<200) { player.armor+=25; if(player.armor>200)player.armor=200; pickups[i].active=0; }
+                    break;
+            }
         }
     }
 
@@ -579,129 +857,87 @@ static void setup_lighting(void) {
     glEnable(GL_COLOR_MATERIAL);
     glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
 
-    float r = 1.0f, g = 1.0f, b = 1.0f;
+    float r=1,g=1,b=1;
     switch(light_color_mode) {
         case 1: r=1.0f; g=0.3f; b=0.2f; break;
         case 2: r=0.3f; g=0.4f; b=1.0f; break;
-        default: break;
     }
-    r *= light_brightness;
-    g *= light_brightness;
-    b *= light_brightness;
+    r*=light_brightness; g*=light_brightness; b*=light_brightness;
 
-    /* GL_LIGHT0: main scene light (positional, movable with arrows) */
     glEnable(GL_LIGHT0);
-    float diff0[] = {r*0.8f, g*0.8f, b*0.8f, 1.0f};
-    float amb0[]  = {r*0.15f, g*0.15f, b*0.15f, 1.0f};
-    float spec0[] = {0.5f, 0.5f, 0.5f, 1.0f};
-    glLightfv(GL_LIGHT0, GL_POSITION, ambient_light_pos);
-    glLightfv(GL_LIGHT0, GL_DIFFUSE,  diff0);
-    glLightfv(GL_LIGHT0, GL_AMBIENT,  amb0);
-    glLightfv(GL_LIGHT0, GL_SPECULAR, spec0);
-    glLightf(GL_LIGHT0, GL_CONSTANT_ATTENUATION, 0.3f);
-    glLightf(GL_LIGHT0, GL_LINEAR_ATTENUATION, 0.05f);
-    glLightf(GL_LIGHT0, GL_QUADRATIC_ATTENUATION, 0.01f);
+    float diff0[]={r*0.8f,g*0.8f,b*0.8f,1}, amb0[]={r*0.15f,g*0.15f,b*0.15f,1}, spec0[]={0.5f,0.5f,0.5f,1};
+    glLightfv(GL_LIGHT0,GL_POSITION,ambient_light_pos);
+    glLightfv(GL_LIGHT0,GL_DIFFUSE,diff0);
+    glLightfv(GL_LIGHT0,GL_AMBIENT,amb0);
+    glLightfv(GL_LIGHT0,GL_SPECULAR,spec0);
+    glLightf(GL_LIGHT0,GL_CONSTANT_ATTENUATION,0.3f);
+    glLightf(GL_LIGHT0,GL_LINEAR_ATTENUATION,0.05f);
+    glLightf(GL_LIGHT0,GL_QUADRATIC_ATTENUATION,0.01f);
 
-    /* GL_LIGHT1: flashlight (spotlight attached to player camera) */
     if(flashlight_on) {
         glEnable(GL_LIGHT1);
-        Vec3 fwd = player_forward();
-        float flash_pos[] = {player.pos.x, player.pos.y, player.pos.z, 1.0f};
-        float flash_dir[] = {fwd.x, fwd.y, fwd.z};
-        float flash_diff[] = {0.9f*light_brightness, 0.85f*light_brightness, 0.7f*light_brightness, 1.0f};
-        float flash_amb[]  = {0.0f, 0.0f, 0.0f, 1.0f};
-        glLightfv(GL_LIGHT1, GL_POSITION,       flash_pos);
-        glLightfv(GL_LIGHT1, GL_SPOT_DIRECTION, flash_dir);
-        glLightf (GL_LIGHT1, GL_SPOT_CUTOFF,    25.0f);
-        glLightf (GL_LIGHT1, GL_SPOT_EXPONENT,  30.0f);
-        glLightfv(GL_LIGHT1, GL_DIFFUSE,        flash_diff);
-        glLightfv(GL_LIGHT1, GL_AMBIENT,        flash_amb);
-        glLightf (GL_LIGHT1, GL_CONSTANT_ATTENUATION,  0.5f);
-        glLightf (GL_LIGHT1, GL_LINEAR_ATTENUATION,    0.05f);
-        glLightf (GL_LIGHT1, GL_QUADRATIC_ATTENUATION, 0.02f);
-    } else {
-        glDisable(GL_LIGHT1);
-    }
+        Vec3 fwd=player_forward();
+        float fp[]={player.pos.x,player.pos.y,player.pos.z,1};
+        float fd[]={fwd.x,fwd.y,fwd.z};
+        float fdif[]={0.9f*light_brightness,0.85f*light_brightness,0.7f*light_brightness,1};
+        float fa[]={0,0,0,1};
+        glLightfv(GL_LIGHT1,GL_POSITION,fp);
+        glLightfv(GL_LIGHT1,GL_SPOT_DIRECTION,fd);
+        glLightf(GL_LIGHT1,GL_SPOT_CUTOFF,25.0f);
+        glLightf(GL_LIGHT1,GL_SPOT_EXPONENT,30.0f);
+        glLightfv(GL_LIGHT1,GL_DIFFUSE,fdif);
+        glLightfv(GL_LIGHT1,GL_AMBIENT,fa);
+        glLightf(GL_LIGHT1,GL_CONSTANT_ATTENUATION,0.5f);
+        glLightf(GL_LIGHT1,GL_LINEAR_ATTENUATION,0.05f);
+        glLightf(GL_LIGHT1,GL_QUADRATIC_ATTENUATION,0.02f);
+    } else glDisable(GL_LIGHT1);
 
-    float global_amb[] = {0.08f, 0.08f, 0.10f, 1.0f};
-    glLightModelfv(GL_LIGHT_MODEL_AMBIENT, global_amb);
+    float ga[]={0.08f,0.08f,0.10f,1};
+    glLightModelfv(GL_LIGHT_MODEL_AMBIENT,ga);
 }
 
 /* ──────────────────────────────── Render ───────────────────────────────── */
 
 static void set_projection(void) {
-    glMatrixMode(GL_PROJECTION);
-    glLoadIdentity();
-    gluPerspective(FOV, (float)WINDOW_W/WINDOW_H, NEAR_CLIP, FAR_CLIP);
+    glMatrixMode(GL_PROJECTION); glLoadIdentity();
+    gluPerspective(FOV,(float)WINDOW_W/WINDOW_H,NEAR_CLIP,FAR_CLIP);
     glMatrixMode(GL_MODELVIEW);
 }
 
 static void set_camera(void) {
     glLoadIdentity();
-    Vec3 eye=player.pos;
-    Vec3 fwd=player_forward();
-    Vec3 center=v3add(eye,fwd);
-    gluLookAt(eye.x,eye.y,eye.z, center.x,center.y,center.z, 0,1,0);
+    Vec3 e=player.pos, f=player_forward(), c=v3add(e,f);
+    gluLookAt(e.x,e.y,e.z, c.x,c.y,c.z, 0,1,0);
 }
 
-static void quad_n(float x0,float y0,float z0,
-                   float x1,float y1,float z1,
-                   float x2,float y2,float z2,
-                   float x3,float y3,float z3,
-                   float nx,float ny,float nz,
-                   float us, float vs)
-{
+static void quad_n(float x0,float y0,float z0, float x1,float y1,float z1,
+                   float x2,float y2,float z2, float x3,float y3,float z3,
+                   float nx,float ny,float nz, float us, float vs) {
     glNormal3f(nx,ny,nz);
     glBegin(GL_QUADS);
-    glTexCoord2f(0,   0  ); glVertex3f(x0,y0,z0);
-    glTexCoord2f(us,  0  ); glVertex3f(x1,y1,z1);
-    glTexCoord2f(us,  vs ); glVertex3f(x2,y2,z2);
-    glTexCoord2f(0,   vs ); glVertex3f(x3,y3,z3);
+    glTexCoord2f(0,0);  glVertex3f(x0,y0,z0);
+    glTexCoord2f(us,0); glVertex3f(x1,y1,z1);
+    glTexCoord2f(us,vs);glVertex3f(x2,y2,z2);
+    glTexCoord2f(0,vs); glVertex3f(x3,y3,z3);
     glEnd();
 }
 
 static void draw_level(void) {
     glEnable(GL_TEXTURE_2D);
-    for(int r=0;r<MAP_ROWS_N;r++) {
-        for(int c=0;c<MAP_COLS;c++) {
-            float x0=(float)c,   z0=(float)r;
-            float x1=(float)c+1, z1=(float)r+1;
-
-            if(!map_is_wall(c,r)) {
-                glBindTexture(GL_TEXTURE_2D, tex_floor);
-                glColor3f(0.9f,0.9f,0.9f);
-                quad_n(x0,FLOOR_Y,z0, x1,FLOOR_Y,z0,
-                       x1,FLOOR_Y,z1, x0,FLOOR_Y,z1,
-                       0,1,0, 1,1);
-
-                glBindTexture(GL_TEXTURE_2D, tex_ceil);
-                glColor3f(0.6f,0.6f,0.7f);
-                quad_n(x0,CEIL_Y,z1, x1,CEIL_Y,z1,
-                       x1,CEIL_Y,z0, x0,CEIL_Y,z0,
-                       0,-1,0, 1,1);
-            }
-
-            if(map_is_wall(c,r)) {
-                glBindTexture(GL_TEXTURE_2D, tex_wall);
-                glColor3f(1,1,1);
-
-                if(!map_is_wall(c,r-1))
-                    quad_n(x0,CEIL_Y,z0, x1,CEIL_Y,z0,
-                           x1,FLOOR_Y,z0, x0,FLOOR_Y,z0,
-                           0,0,-1, 1,1);
-                if(!map_is_wall(c,r+1))
-                    quad_n(x1,CEIL_Y,z1, x0,CEIL_Y,z1,
-                           x0,FLOOR_Y,z1, x1,FLOOR_Y,z1,
-                           0,0,1, 1,1);
-                if(!map_is_wall(c-1,r))
-                    quad_n(x0,CEIL_Y,z1, x0,CEIL_Y,z0,
-                           x0,FLOOR_Y,z0, x0,FLOOR_Y,z1,
-                           -1,0,0, 1,1);
-                if(!map_is_wall(c+1,r))
-                    quad_n(x1,CEIL_Y,z0, x1,CEIL_Y,z1,
-                           x1,FLOOR_Y,z1, x1,FLOOR_Y,z0,
-                           1,0,0, 1,1);
-            }
+    for(int r=0;r<MAP_ROWS_N;r++) for(int c=0;c<MAP_COLS;c++) {
+        float x0=(float)c, z0=(float)r, x1=x0+1, z1=z0+1;
+        if(!map_is_wall(c,r)) {
+            glBindTexture(GL_TEXTURE_2D,tex_floor); glColor3f(0.9f,0.9f,0.9f);
+            quad_n(x0,FLOOR_Y,z0,x1,FLOOR_Y,z0,x1,FLOOR_Y,z1,x0,FLOOR_Y,z1, 0,1,0, 1,1);
+            glBindTexture(GL_TEXTURE_2D,tex_ceil); glColor3f(0.6f,0.6f,0.7f);
+            quad_n(x0,CEIL_Y,z1,x1,CEIL_Y,z1,x1,CEIL_Y,z0,x0,CEIL_Y,z0, 0,-1,0, 1,1);
+        }
+        if(map_is_wall(c,r)) {
+            glBindTexture(GL_TEXTURE_2D,tex_wall); glColor3f(1,1,1);
+            if(!map_is_wall(c,r-1)) quad_n(x0,CEIL_Y,z0,x1,CEIL_Y,z0,x1,FLOOR_Y,z0,x0,FLOOR_Y,z0, 0,0,-1, 1,1);
+            if(!map_is_wall(c,r+1)) quad_n(x1,CEIL_Y,z1,x0,CEIL_Y,z1,x0,FLOOR_Y,z1,x1,FLOOR_Y,z1, 0,0,1, 1,1);
+            if(!map_is_wall(c-1,r)) quad_n(x0,CEIL_Y,z1,x0,CEIL_Y,z0,x0,FLOOR_Y,z0,x0,FLOOR_Y,z1, -1,0,0, 1,1);
+            if(!map_is_wall(c+1,r)) quad_n(x1,CEIL_Y,z0,x1,CEIL_Y,z1,x1,FLOOR_Y,z1,x1,FLOOR_Y,z0, 1,0,0, 1,1);
         }
     }
     glDisable(GL_TEXTURE_2D);
@@ -709,23 +945,17 @@ static void draw_level(void) {
 
 static void draw_enemies(void) {
     glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, tex_enemy);
-
+    glBindTexture(GL_TEXTURE_2D,tex_enemy);
     for(int i=0;i<enemy_count;i++) {
         if(!enemies[i].alive) continue;
         Vec3 p=enemies[i].pos;
-        float bob = sinf(enemies[i].bob_phase) * 0.1f;
-
-        if(enemies[i].pain_timer>0) glColor3f(1,0.3f,0.3f);
-        else                         glColor3f(1,1,1);
-
+        float bob=sinf(enemies[i].bob_phase)*0.1f;
+        if(enemies[i].pain_timer>0) glColor3f(1,0.3f,0.3f); else glColor3f(1,1,1);
         glPushMatrix();
-        glTranslatef(p.x, p.y + bob, p.z);
-        float dx = player.pos.x - p.x;
-        float dz = player.pos.z - p.z;
-        float angle = atan2f(dx, dz) * 180.0f / PI;
-        glRotatef(angle, 0, 1, 0);
-        glScalef(0.6f, 0.8f, 0.6f);
+        glTranslatef(p.x,p.y+bob,p.z);
+        float dx=player.pos.x-p.x, dz=player.pos.z-p.z;
+        glRotatef(atan2f(dx,dz)*180.0f/PI, 0,1,0);
+        glScalef(0.6f,0.8f,0.6f);
         obj_draw(&model_enemy);
         glPopMatrix();
     }
@@ -736,66 +966,132 @@ static void draw_enemies(void) {
 static void draw_decorations(void) {
     glEnable(GL_TEXTURE_2D);
     for(int i=0;i<deco_count;i++) {
-        Vec3 p = decorations[i].pos;
+        Vec3 p=decorations[i].pos;
         glPushMatrix();
-        glTranslatef(p.x, p.y, p.z);
-        glRotatef(decorations[i].rotation, 0, 1, 0);
-
-        if(decorations[i].type == DECO_BARREL) {
-            glBindTexture(GL_TEXTURE_2D, tex_barrel);
-            glColor3f(0.8f, 0.9f, 0.8f);
-            glScalef(0.5f, 0.8f, 0.5f);
-            obj_draw(&model_barrel);
+        glTranslatef(p.x,p.y,p.z);
+        glRotatef(decorations[i].rotation,0,1,0);
+        if(decorations[i].type==DECO_BARREL) {
+            glBindTexture(GL_TEXTURE_2D,tex_barrel); glColor3f(0.8f,0.9f,0.8f);
+            glScalef(0.5f,0.8f,0.5f); obj_draw(&model_barrel);
         } else {
-            glBindTexture(GL_TEXTURE_2D, tex_crate);
-            glColor3f(0.9f, 0.8f, 0.6f);
-            glScalef(0.7f, 0.7f, 0.7f);
-            obj_draw(&model_cube);
+            glBindTexture(GL_TEXTURE_2D,tex_crate); glColor3f(0.9f,0.8f,0.6f);
+            glScalef(0.7f,0.7f,0.7f); obj_draw(&model_cube);
         }
         glPopMatrix();
     }
-    glColor3f(1,1,1);
-    glDisable(GL_TEXTURE_2D);
+    glColor3f(1,1,1); glDisable(GL_TEXTURE_2D);
 }
 
-/* Floating diamond showing the movable light position */
-static void draw_light_marker(void) {
-    glDisable(GL_LIGHTING);
-    glDisable(GL_TEXTURE_2D);
+static void draw_pickups(void) {
+    glEnable(GL_TEXTURE_2D);
+    for(int i=0;i<pickup_count;i++) {
+        if(!pickups[i].active) continue;
+        Vec3 p=pickups[i].pos;
+        float bob=sinf(pickups[i].bob_phase)*0.1f;
+        float rot=game_time*90.0f;
 
-    float pulse = 0.7f + 0.3f * sinf(game_time * 4.0f);
-    switch(light_color_mode) {
-        case 1:  glColor3f(1.0f*pulse, 0.3f*pulse, 0.1f*pulse); break;
-        case 2:  glColor3f(0.2f*pulse, 0.3f*pulse, 1.0f*pulse); break;
-        default: glColor3f(1.0f*pulse, 1.0f*pulse, 0.8f*pulse); break;
+        glPushMatrix();
+        glTranslatef(p.x, p.y+bob, p.z);
+        glRotatef(rot, 0,1,0);
+        glScalef(0.3f,0.3f,0.3f);
+
+        switch(pickups[i].type) {
+            case PICKUP_HEALTH: glBindTexture(GL_TEXTURE_2D,tex_pickup_health); glColor3f(0.3f,1.0f,0.3f); break;
+            case PICKUP_AMMO:   glBindTexture(GL_TEXTURE_2D,tex_pickup_ammo);   glColor3f(1.0f,0.9f,0.3f); break;
+            case PICKUP_ARMOR:  glBindTexture(GL_TEXTURE_2D,tex_pickup_armor);  glColor3f(0.3f,0.5f,1.0f); break;
+        }
+        obj_draw(&model_cube);
+        glPopMatrix();
     }
+    glColor3f(1,1,1); glDisable(GL_TEXTURE_2D);
+}
 
+static void draw_light_marker(void) {
+    glDisable(GL_LIGHTING); glDisable(GL_TEXTURE_2D);
+    float pulse=0.7f+0.3f*sinf(game_time*4.0f);
+    switch(light_color_mode) {
+        case 1:  glColor3f(pulse,0.3f*pulse,0.1f*pulse); break;
+        case 2:  glColor3f(0.2f*pulse,0.3f*pulse,pulse); break;
+        default: glColor3f(pulse,pulse,0.8f*pulse); break;
+    }
     glPushMatrix();
-    glTranslatef(ambient_light_pos[0], ambient_light_pos[1], ambient_light_pos[2]);
-    float s = 0.15f;
+    glTranslatef(ambient_light_pos[0],ambient_light_pos[1],ambient_light_pos[2]);
+    float s=0.15f;
     glBegin(GL_TRIANGLES);
-    glVertex3f(0, s*2, 0); glVertex3f(-s,0,-s); glVertex3f( s,0,-s);
-    glVertex3f(0, s*2, 0); glVertex3f( s,0,-s); glVertex3f( s,0, s);
-    glVertex3f(0, s*2, 0); glVertex3f( s,0, s); glVertex3f(-s,0, s);
-    glVertex3f(0, s*2, 0); glVertex3f(-s,0, s); glVertex3f(-s,0,-s);
-    glVertex3f(0,-s*2, 0); glVertex3f( s,0,-s); glVertex3f(-s,0,-s);
-    glVertex3f(0,-s*2, 0); glVertex3f( s,0, s); glVertex3f( s,0,-s);
-    glVertex3f(0,-s*2, 0); glVertex3f(-s,0, s); glVertex3f( s,0, s);
-    glVertex3f(0,-s*2, 0); glVertex3f(-s,0,-s); glVertex3f(-s,0, s);
+    glVertex3f(0,s*2,0);glVertex3f(-s,0,-s);glVertex3f(s,0,-s);
+    glVertex3f(0,s*2,0);glVertex3f(s,0,-s);glVertex3f(s,0,s);
+    glVertex3f(0,s*2,0);glVertex3f(s,0,s);glVertex3f(-s,0,s);
+    glVertex3f(0,s*2,0);glVertex3f(-s,0,s);glVertex3f(-s,0,-s);
+    glVertex3f(0,-s*2,0);glVertex3f(s,0,-s);glVertex3f(-s,0,-s);
+    glVertex3f(0,-s*2,0);glVertex3f(s,0,s);glVertex3f(s,0,-s);
+    glVertex3f(0,-s*2,0);glVertex3f(-s,0,s);glVertex3f(s,0,s);
+    glVertex3f(0,-s*2,0);glVertex3f(-s,0,-s);glVertex3f(-s,0,s);
     glEnd();
     glPopMatrix();
     glEnable(GL_LIGHTING);
 }
 
-/* ────────────────────────────────── HUD ────────────────────────────────── */
+/* ────────────────── Bitmap Font (same as before) ──────────────────────── */
+
+static const unsigned long long FONT_GLYPHS[128] = {
+    [' ']=0,['+' ]=0x0018187E18180000ULL,['-']=0x000000FE00000000ULL,
+    ['.']=0x0000000000181800ULL,['/']=0x060C183060C08000ULL,['%']=0xC6CC183066C60000ULL,
+    ['0']=0x7CC6CEDEF6E67C00ULL,['1']=0x1838181818187E00ULL,['2']=0x7CC6060C3060FE00ULL,
+    ['3']=0x7CC6061C06C67C00ULL,['4']=0x0C1C3C6CFE0C0C00ULL,['5']=0xFEC0FC0606C67C00ULL,
+    ['6']=0x3C60C0FCC6C67C00ULL,['7']=0xFE06060C18181800ULL,['8']=0x7CC6C67CC6C67C00ULL,
+    ['9']=0x7CC6C67E06067C00ULL,[':']=0x0018180018180000ULL,['(']=0x0C18303030180C00ULL,
+    [')']=0x30180C0C0C183000ULL,['!']=0x1818181818001800ULL,['*']=0x0066663CFF3C6600ULL,
+    ['A']=0x386CC6FEC6C6C600ULL,['B']=0xFC66667C6666FC00ULL,['C']=0x3C66C0C0C0663C00ULL,
+    ['D']=0xF86C6666666CF800ULL,['E']=0xFE6268786862FE00ULL,['F']=0xFE6268786860F000ULL,
+    ['G']=0x3C66C0C0CE663E00ULL,['H']=0xC6C6C6FEC6C6C600ULL,['I']=0x3C18181818183C00ULL,
+    ['J']=0x1E0C0C0CCCCC7800ULL,['K']=0xC6CCD8F0D8CCC600ULL,['L']=0xF06060606266FE00ULL,
+    ['M']=0xC6EEFEFED6C6C600ULL,['N']=0xC6E6F6DECEC6C600ULL,['O']=0x7CC6C6C6C6C67C00ULL,
+    ['P']=0xFC66667C6060F000ULL,['Q']=0x7CC6C6C6D6DE7C06ULL,['R']=0xFC66667C6C66F200ULL,
+    ['S']=0x7CC6C07C06C67C00ULL,['T']=0x7E5A181818183C00ULL,['U']=0xC6C6C6C6C6C67C00ULL,
+    ['V']=0xC6C6C6C66C381000ULL,['W']=0xC6C6D6FEEEC6C600ULL,['X']=0xC66C38386CC6C600ULL,
+    ['Y']=0x6666663C18183C00ULL,['Z']=0xFE860C183062FE00ULL,
+    ['a']=0x0000780C7CCC7600ULL,['b']=0xE060607C6666DC00ULL,['c']=0x00007CC6C0C67C00ULL,
+    ['d']=0x1C0C0C7CCCCC7600ULL,['e']=0x00007CC6FEC07C00ULL,['f']=0x1C3630FC30303000ULL,
+    ['g']=0x000076CCCC7C0CF8ULL,['h']=0xE0606C766666E600ULL,['i']=0x1800381818183C00ULL,
+    ['j']=0x0600060606C67C00ULL,['k']=0xE060666C786CE600ULL,['l']=0x3818181818183C00ULL,
+    ['m']=0x0000ECFED6D6C600ULL,['n']=0x0000DC6666666600ULL,['o']=0x00007CC6C6C67C00ULL,
+    ['p']=0x0000DC667C60F000ULL,['q']=0x000076CC7C0C1E00ULL,['r']=0x0000DC7660606000ULL,
+    ['s']=0x00007CC07C06FC00ULL,['t']=0x1030FC3030361C00ULL,['u']=0x0000CCCCCCCC7600ULL,
+    ['v']=0x0000C6C66C381000ULL,['w']=0x0000C6D6FEEE4400ULL,['x']=0x0000C66C386CC600ULL,
+    ['y']=0x0000C6C67E060CFCULL,['z']=0x0000FC983064FC00ULL,
+    [',']=0x0000000000181830ULL,['?']=0x7CC60C1818001800ULL,
+};
+
+static void draw_char(float px, float py, float size, char ch) {
+    unsigned char uch=(unsigned char)ch;
+    if(uch>=128) return;
+    unsigned long long g=FONT_GLYPHS[uch];
+    if(!g && ch!=' ') return;
+    for(int row=0;row<8;row++) {
+        unsigned char bits=(unsigned char)((g>>(56-row*8))&0xFF);
+        for(int col=0;col<8;col++) {
+            if(bits & (0x80>>col)) {
+                float x=px+col*size, y=py+(7-row)*size;
+                glBegin(GL_QUADS);
+                glVertex2f(x,y); glVertex2f(x+size,y);
+                glVertex2f(x+size,y+size); glVertex2f(x,y+size);
+                glEnd();
+            }
+        }
+    }
+}
+
+static void draw_text(float x, float y, float size, const char *text) {
+    for(int i=0;text[i];i++) draw_char(x+i*size*9, y, size, text[i]);
+}
+
+/* ──────────────────── Doom-style Status Bar HUD ───────────────────────── */
 
 static void ortho_begin(void) {
     glDisable(GL_LIGHTING);
-    glMatrixMode(GL_PROJECTION);
-    glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity();
     glOrtho(0,WINDOW_W,0,WINDOW_H,-1,1);
-    glMatrixMode(GL_MODELVIEW);
-    glPushMatrix(); glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
     glDisable(GL_DEPTH_TEST);
 }
 
@@ -806,133 +1102,152 @@ static void ortho_end(void) {
     glEnable(GL_LIGHTING);
 }
 
-static void fill_rect(float x,float y,float w,float h,float r,float g,float b,float a){
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+static void fill_rect(float x,float y,float w,float h,float r,float g,float b,float a) {
+    glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
     glColor4f(r,g,b,a);
     glBegin(GL_QUADS);
-    glVertex2f(x,y); glVertex2f(x+w,y);
-    glVertex2f(x+w,y+h); glVertex2f(x,y+h);
+    glVertex2f(x,y);glVertex2f(x+w,y);glVertex2f(x+w,y+h);glVertex2f(x,y+h);
     glEnd();
     glDisable(GL_BLEND);
 }
 
-/* ─────────── Bitmap font: 8x8 pixel glyphs drawn as tiny quads ──────── */
-
-static const unsigned long long FONT_GLYPHS[128] = {
-    [' ']  = 0x0000000000000000ULL,
-    ['!']  = 0x1818181818001800ULL,
-    ['+']  = 0x0018187E18180000ULL,
-    ['-']  = 0x000000FE00000000ULL,
-    ['.']  = 0x0000000000181800ULL,
-    ['/']  = 0x060C183060C08000ULL,
-    ['%']  = 0xC6CC183066C60000ULL,
-    ['0']  = 0x7CC6CEDEF6E67C00ULL,
-    ['1']  = 0x1838181818187E00ULL,
-    ['2']  = 0x7CC6060C3060FE00ULL,
-    ['3']  = 0x7CC6061C06C67C00ULL,
-    ['4']  = 0x0C1C3C6CFE0C0C00ULL,
-    ['5']  = 0xFEC0FC0606C67C00ULL,
-    ['6']  = 0x3C60C0FCC6C67C00ULL,
-    ['7']  = 0xFE06060C18181800ULL,
-    ['8']  = 0x7CC6C67CC6C67C00ULL,
-    ['9']  = 0x7CC6C67E06067C00ULL,
-    [':']  = 0x0018180018180000ULL,
-    ['(']  = 0x0C18303030180C00ULL,
-    [')']  = 0x30180C0C0C183000ULL,
-    ['A']  = 0x386CC6FEC6C6C600ULL,
-    ['B']  = 0xFC66667C6666FC00ULL,
-    ['C']  = 0x3C66C0C0C0663C00ULL,
-    ['D']  = 0xF86C6666666CF800ULL,
-    ['E']  = 0xFE6268786862FE00ULL,
-    ['F']  = 0xFE6268786860F000ULL,
-    ['G']  = 0x3C66C0C0CE663E00ULL,
-    ['H']  = 0xC6C6C6FEC6C6C600ULL,
-    ['I']  = 0x3C18181818183C00ULL,
-    ['J']  = 0x1E0C0C0CCCCC7800ULL,
-    ['K']  = 0xC6CCD8F0D8CCC600ULL,
-    ['L']  = 0xF06060606266FE00ULL,
-    ['M']  = 0xC6EEFEFED6C6C600ULL,
-    ['N']  = 0xC6E6F6DECEC6C600ULL,
-    ['O']  = 0x7CC6C6C6C6C67C00ULL,
-    ['P']  = 0xFC66667C6060F000ULL,
-    ['Q']  = 0x7CC6C6C6D6DE7C06ULL,
-    ['R']  = 0xFC66667C6C66F200ULL,
-    ['S']  = 0x7CC6C07C06C67C00ULL,
-    ['T']  = 0x7E5A181818183C00ULL,
-    ['U']  = 0xC6C6C6C6C6C67C00ULL,
-    ['V']  = 0xC6C6C6C66C381000ULL,
-    ['W']  = 0xC6C6D6FEEEC6C600ULL,
-    ['X']  = 0xC66C38386CC6C600ULL,
-    ['Y']  = 0x6666663C18183C00ULL,
-    ['Z']  = 0xFE860C183062FE00ULL,
-    ['a']  = 0x0000780C7CCC7600ULL,
-    ['b']  = 0xE060607C6666DC00ULL,
-    ['c']  = 0x00007CC6C0C67C00ULL,
-    ['d']  = 0x1C0C0C7CCCCC7600ULL,
-    ['e']  = 0x00007CC6FEC07C00ULL,
-    ['f']  = 0x1C3630FC30303000ULL,
-    ['g']  = 0x000076CCCC7C0CF8ULL,
-    ['h']  = 0xE0606C766666E600ULL,
-    ['i']  = 0x1800381818183C00ULL,
-    ['j']  = 0x0600060606C67C00ULL,
-    ['k']  = 0xE060666C786CE600ULL,
-    ['l']  = 0x3818181818183C00ULL,
-    ['m']  = 0x0000ECFED6D6C600ULL,
-    ['n']  = 0x0000DC6666666600ULL,
-    ['o']  = 0x00007CC6C6C67C00ULL,
-    ['p']  = 0x0000DC667C60F000ULL,
-    ['q']  = 0x000076CC7C0C1E00ULL,
-    ['r']  = 0x0000DC7660606000ULL,
-    ['s']  = 0x00007CC07C06FC00ULL,
-    ['t']  = 0x1030FC3030361C00ULL,
-    ['u']  = 0x0000CCCCCCCC7600ULL,
-    ['v']  = 0x0000C6C66C381000ULL,
-    ['w']  = 0x0000C6D6FEEE4400ULL,
-    ['x']  = 0x0000C66C386CC600ULL,
-    ['y']  = 0x0000C6C67E060CFCULL,
-    ['z']  = 0x0000FC983064FC00ULL,
-    [',']  = 0x0000000000181830ULL,
-    ['?']  = 0x7CC60C1818001800ULL,
-};
-
-static void draw_char(float px, float py, float size, char ch) {
-    unsigned char uch = (unsigned char)ch;
-    if(uch >= 128) return;
-    unsigned long long g = FONT_GLYPHS[uch];
-    if(!g && ch!=' ') return;
-    for(int row=0; row<8; row++) {
-        unsigned char bits = (unsigned char)((g >> (56 - row*8)) & 0xFF);
-        for(int col=0; col<8; col++) {
-            if(bits & (0x80 >> col)) {
-                float x = px + col*size;
-                float y = py + (7-row)*size;
-                glBegin(GL_QUADS);
-                glVertex2f(x,     y);
-                glVertex2f(x+size,y);
-                glVertex2f(x+size,y+size);
-                glVertex2f(x,     y+size);
-                glEnd();
-            }
-        }
-    }
-}
-
-static void draw_text(float x, float y, float size, const char *text) {
-    for(int i=0; text[i]; i++) {
-        draw_char(x + i*size*9, y, size, text[i]);
-    }
-}
-
-static void draw_hud(void) {
+/* Draws the Doom-style bottom status bar:
+ * | AMMO count | HEALTH % | ARMS [1][2][3] | ARMOR % | PISTOL / SHOTGUN ammo |
+ */
+static void draw_doom_hud(void) {
     ortho_begin();
 
-    /* Crosshair */
+    float bar_h = 60;
+    float bar_y = 0;
+
+    /* Dark gray background bar */
+    fill_rect(0, bar_y, WINDOW_W, bar_h, 0.22f, 0.22f, 0.22f, 0.95f);
+    /* Top border line */
+    fill_rect(0, bar_y+bar_h-2, WINDOW_W, 2, 0.5f, 0.5f, 0.5f, 1.0f);
+
+    /* Divider positions: split bar into 5 sections */
+    float sec_w = WINDOW_W / 5.0f;
+
+    /* Section separators (dark lines) */
+    for(int i=1;i<5;i++) {
+        fill_rect(sec_w*i-1, bar_y, 2, bar_h, 0.1f,0.1f,0.1f,1);
+    }
+
+    /* Inset (recessed) look for each number area */
+    float inset = 4;
+
+    /* ─── Section 1: AMMO (current weapon ammo count) ─── */
+    {
+        float sx = 0;
+        /* Inset background */
+        fill_rect(sx+inset, bar_y+inset, sec_w-inset*2, bar_h-inset*2-4, 0.12f,0.12f,0.12f,1);
+
+        /* Label */
+        glColor4f(0.65f,0.55f,0.45f,1);
+        draw_text(sx+sec_w/2-30, bar_y+bar_h-16, 1.2f, "AMMO");
+
+        /* Value */
+        int cur_ammo = 0;
+        switch(player.weapon) {
+            case WPN_FIST: cur_ammo = -1; break; /* infinite */
+            case WPN_PISTOL: cur_ammo = player.ammo_pistol; break;
+            case WPN_SHOTGUN: cur_ammo = player.ammo_shotgun; break;
+        }
+        char buf[16];
+        if(cur_ammo < 0) snprintf(buf,sizeof(buf),"--");
+        else snprintf(buf,sizeof(buf),"%d",cur_ammo);
+        glColor4f(0.9f,0.2f,0.2f,1);
+        draw_text(sx+sec_w/2-24, bar_y+12, 3.0f, buf);
+    }
+
+    /* ─── Section 2: HEALTH % ─── */
+    {
+        float sx = sec_w;
+        fill_rect(sx+inset, bar_y+inset, sec_w-inset*2, bar_h-inset*2-4, 0.12f,0.12f,0.12f,1);
+
+        glColor4f(0.65f,0.55f,0.45f,1);
+        draw_text(sx+sec_w/2-38, bar_y+bar_h-16, 1.2f, "HEALTH");
+
+        char buf[16];
+        snprintf(buf,sizeof(buf),"%d%%",player.health);
+        glColor4f(0.9f,0.2f,0.2f,1);
+        draw_text(sx+sec_w/2-36, bar_y+12, 3.0f, buf);
+    }
+
+    /* ─── Section 3: ARMS (weapon slots 1/2/3) ─── */
+    {
+        float sx = sec_w*2;
+        fill_rect(sx+inset, bar_y+inset, sec_w-inset*2, bar_h-inset*2-4, 0.12f,0.12f,0.12f,1);
+
+        glColor4f(0.65f,0.55f,0.45f,1);
+        draw_text(sx+sec_w/2-24, bar_y+bar_h-16, 1.2f, "ARMS");
+
+        const char *wpn_names[] = {"1","2","3"};
+        for(int w=0;w<3;w++) {
+            float bx = sx + inset + 12 + w*(sec_w-inset*2-20)/3.0f;
+            float by = bar_y + 10;
+            float bw = (sec_w-inset*2-40)/3.0f;
+            float bh_s = 30;
+
+            /* Slot background */
+            if(w == (int)player.weapon)
+                fill_rect(bx, by, bw, bh_s, 0.35f,0.30f,0.20f,1);
+            else
+                fill_rect(bx, by, bw, bh_s, 0.18f,0.18f,0.18f,1);
+
+            /* Number */
+            if(w == (int)player.weapon)
+                glColor4f(1.0f,0.9f,0.2f,1);
+            else
+                glColor4f(0.5f,0.45f,0.35f,1);
+
+            draw_text(bx+bw/2-8, by+8, 2.0f, wpn_names[w]);
+        }
+    }
+
+    /* ─── Section 4: ARMOR % ─── */
+    {
+        float sx = sec_w*3;
+        fill_rect(sx+inset, bar_y+inset, sec_w-inset*2, bar_h-inset*2-4, 0.12f,0.12f,0.12f,1);
+
+        glColor4f(0.65f,0.55f,0.45f,1);
+        draw_text(sx+sec_w/2-34, bar_y+bar_h-16, 1.2f, "ARMOR");
+
+        char buf[16];
+        snprintf(buf,sizeof(buf),"%d%%",player.armor);
+        glColor4f(0.9f,0.2f,0.2f,1);
+        draw_text(sx+sec_w/2-36, bar_y+12, 3.0f, buf);
+    }
+
+    /* ─── Section 5: Ammo types (Pistol / Shotgun counts) ─── */
+    {
+        float sx = sec_w*4;
+        fill_rect(sx+inset, bar_y+inset, sec_w-inset*2, bar_h-inset*2-4, 0.12f,0.12f,0.12f,1);
+
+        char buf[32];
+        /* Pistol ammo */
+        glColor4f(0.65f,0.55f,0.45f,1);
+        draw_text(sx+10, bar_y+34, 1.2f, "PSTL");
+
+        snprintf(buf,sizeof(buf),"%d",player.ammo_pistol);
+        glColor4f(0.9f,0.8f,0.2f,1);
+        draw_text(sx+70, bar_y+32, 2.0f, buf);
+
+        /* Shotgun ammo */
+        glColor4f(0.65f,0.55f,0.45f,1);
+        draw_text(sx+10, bar_y+10, 1.2f, "SHTG");
+
+        snprintf(buf,sizeof(buf),"%d",player.ammo_shotgun);
+        glColor4f(0.9f,0.8f,0.2f,1);
+        draw_text(sx+70, bar_y+8, 2.0f, buf);
+    }
+
+    /* ─── Crosshair ─── */
     int cx=WINDOW_W/2, cy=WINDOW_H/2;
-    fill_rect(cx-12,cy-2,  10,4,  1,1,1,0.8f);
-    fill_rect(cx+2, cy-2,  10,4,  1,1,1,0.8f);
-    fill_rect(cx-2, cy-12, 4, 10, 1,1,1,0.8f);
-    fill_rect(cx-2, cy+2,  4, 10, 1,1,1,0.8f);
+    fill_rect(cx-12,cy-2,10,4, 1,1,1,0.8f);
+    fill_rect(cx+2,cy-2,10,4, 1,1,1,0.8f);
+    fill_rect(cx-2,cy-12,4,10, 1,1,1,0.8f);
+    fill_rect(cx-2,cy+2,4,10, 1,1,1,0.8f);
 
     /* Muzzle flash overlay */
     if(player.muzzle_flash>0) {
@@ -940,44 +1255,28 @@ static void draw_hud(void) {
         fill_rect(0,0,WINDOW_W,WINDOW_H, 1,0.8f,0,0.15f*a);
     }
 
-    /* Health bar */
-    fill_rect(20, 20, 204, 24, 0.2f,0.2f,0.2f,0.8f);
-    float hp_ratio = player.health/100.0f;
-    if(hp_ratio<0) hp_ratio=0;
-    float hcr = hp_ratio<0.4f ? 1.0f : 0.2f;
-    float hcg = hp_ratio>0.6f ? 0.8f : (hp_ratio*1.5f);
-    fill_rect(22, 22, 200*hp_ratio, 20, hcr, hcg, 0.1f, 1.0f);
+    /* Light info (top-left, subtle) */
+    glColor4f(1,1,0.6f,0.5f);
+    const char *cn[]={"WHITE","RED","BLUE"};
+    char lbuf[64];
+    snprintf(lbuf,sizeof(lbuf),"LIGHT: %.0f%% %s %s",
+             light_brightness*100, cn[light_color_mode],
+             flashlight_on?"FLASH:ON":"FLASH:OFF");
+    draw_text(10, WINDOW_H-20, 1.3f, lbuf);
 
-    /* Ammo bar */
-    fill_rect(20, 50, 154, 18, 0.2f,0.2f,0.2f,0.8f);
-    fill_rect(22, 52, (player.ammo/50.0f)*150, 14, 0.9f,0.7f,0.1f,1.0f);
-
-    /* Labels */
-    glColor4f(1,1,1,0.9f);
-    draw_text(22, 26, 2.0f, "HP");
-    draw_text(22, 54, 1.5f, "AMMO");
+    /* F1 hint */
+    glColor4f(0.6f,0.6f,0.6f,0.4f);
+    draw_text(WINDOW_W-160, WINDOW_H-20, 1.3f, "F1: HELP");
 
     /* Enemy count */
     int alive=0;
     for(int i=0;i<enemy_count;i++) alive+=enemies[i].alive;
-    char buf[64];
-    glColor4f(1,0.4f,0.4f,0.9f);
-    snprintf(buf, sizeof(buf), "ENEMIES: %d", alive);
-    draw_text(20, 80, 2.0f, buf);
+    glColor4f(1,0.4f,0.4f,0.7f);
+    char ebuf[32];
+    snprintf(ebuf,sizeof(ebuf),"ENEMIES: %d",alive);
+    draw_text(10, WINDOW_H-40, 1.5f, ebuf);
 
-    /* Light info */
-    glColor4f(1,1,0.6f,0.7f);
-    const char *cnames[] = {"WHITE", "RED", "BLUE"};
-    snprintf(buf, sizeof(buf), "LIGHT: %.0f%%  %s  %s",
-             light_brightness*100, cnames[light_color_mode],
-             flashlight_on ? "FLASH:ON" : "FLASH:OFF");
-    draw_text(20, WINDOW_H-30, 1.5f, buf);
-
-    /* F1 hint */
-    glColor4f(0.7f,0.7f,0.7f,0.5f);
-    draw_text(WINDOW_W-200, WINDOW_H-25, 1.5f, "F1: HELP");
-
-    /* Game over / win overlays */
+    /* Game over / win */
     if(game_over) {
         fill_rect(WINDOW_W/2-200, WINDOW_H/2-50, 400, 100, 0.8f,0.05f,0.05f,0.85f);
         glColor4f(1,1,1,1);
@@ -1000,68 +1299,57 @@ static void draw_hud(void) {
 
 static void draw_help_screen(void) {
     ortho_begin();
+    fill_rect(0,0,WINDOW_W,WINDOW_H, 0,0,0,0.75f);
 
-    fill_rect(0, 0, WINDOW_W, WINDOW_H, 0, 0, 0, 0.75f);
+    float px=160, py=50, pw=WINDOW_W-320, ph=WINDOW_H-100;
+    fill_rect(px,py,pw,ph, 0.1f,0.1f,0.15f,0.95f);
+    fill_rect(px+2,py+2,pw-4,ph-4, 0.15f,0.15f,0.2f,0.95f);
 
-    float px = 200, py = 80, pw = WINDOW_W-400, ph = WINDOW_H-160;
-    fill_rect(px, py, pw, ph, 0.1f, 0.1f, 0.15f, 0.95f);
-    fill_rect(px+2, py+2, pw-4, ph-4, 0.15f, 0.15f, 0.2f, 0.95f);
+    float tx=px+30, ty=py+ph-45, lh=24, sz=1.8f;
 
-    float tx = px + 30;
-    float ty = py + ph - 50;
-    float lh = 28;
-    float sz = 2.0f;
+    glColor4f(1,0.4f,0.3f,1);
+    draw_text(tx,ty,2.5f,"DOOM3D - HELP"); ty-=lh*1.5f;
 
-    glColor4f(1.0f, 0.4f, 0.3f, 1.0f);
-    draw_text(tx, ty, 3.0f, "DOOM3D - HELP");
-    ty -= lh * 1.5f;
+    glColor4f(1,0.9f,0.5f,1);
+    draw_text(tx,ty,sz,"DESCRIPTION:"); ty-=lh;
+    glColor4f(0.9f,0.9f,0.9f,0.9f);
+    draw_text(tx,ty,sz,"DOOM STYLE 3D FPS. KILL ALL ENEMIES TO WIN."); ty-=lh;
+    draw_text(tx,ty,sz,"3D MODELS LOADED FROM OBJ FILES."); ty-=lh*1.3f;
 
-    glColor4f(1.0f, 0.9f, 0.5f, 1.0f);
-    draw_text(tx, ty, sz, "DESCRIPTION:");
-    ty -= lh;
-    glColor4f(0.9f, 0.9f, 0.9f, 0.9f);
-    draw_text(tx, ty, sz, "A DOOM STYLE 3D FPS. KILL ALL ENEMIES");
-    ty -= lh;
-    draw_text(tx, ty, sz, "TO WIN. BUILT WITH SDL2 AND OPENGL.");
-    ty -= lh;
-    draw_text(tx, ty, sz, "3D MODELS LOADED FROM OBJ FILES.");
-    ty -= lh * 1.5f;
+    glColor4f(1,0.9f,0.5f,1);
+    draw_text(tx,ty,sz,"MOVEMENT:"); ty-=lh;
+    glColor4f(0.8f,0.8f,0.8f,0.9f);
+    draw_text(tx,ty,sz,"W S A D    - MOVE AND STRAFE"); ty-=lh;
+    draw_text(tx,ty,sz,"MOUSE      - LOOK AROUND"); ty-=lh;
+    draw_text(tx,ty,sz,"SPACE      - JUMP"); ty-=lh;
+    draw_text(tx,ty,sz,"L. CLICK   - SHOOT"); ty-=lh*1.3f;
 
-    glColor4f(1.0f, 0.9f, 0.5f, 1.0f);
-    draw_text(tx, ty, sz, "MOVEMENT:");
-    ty -= lh;
-    glColor4f(0.8f, 0.8f, 0.8f, 0.9f);
-    draw_text(tx, ty, sz, "W S A D   - MOVE AND STRAFE");
-    ty -= lh;
-    draw_text(tx, ty, sz, "MOUSE     - LOOK AROUND");
-    ty -= lh;
-    draw_text(tx, ty, sz, "SPACE     - JUMP");
-    ty -= lh;
-    draw_text(tx, ty, sz, "L. CLICK  - SHOOT");
-    ty -= lh * 1.5f;
+    glColor4f(1,0.9f,0.5f,1);
+    draw_text(tx,ty,sz,"WEAPONS:"); ty-=lh;
+    glColor4f(0.8f,0.8f,0.8f,0.9f);
+    draw_text(tx,ty,sz,"1          - FIST (MELEE, NO AMMO)"); ty-=lh;
+    draw_text(tx,ty,sz,"2          - PISTOL"); ty-=lh;
+    draw_text(tx,ty,sz,"3          - SHOTGUN (SPREAD, HIGH DMG)"); ty-=lh*1.3f;
 
-    glColor4f(1.0f, 0.9f, 0.5f, 1.0f);
-    draw_text(tx, ty, sz, "LIGHTING:");
-    ty -= lh;
-    glColor4f(0.8f, 0.8f, 0.8f, 0.9f);
-    draw_text(tx, ty, sz, "+/-       - BRIGHTNESS UP/DOWN");
-    ty -= lh;
-    draw_text(tx, ty, sz, "L         - CYCLE LIGHT COLOR");
-    ty -= lh;
-    draw_text(tx, ty, sz, "F         - TOGGLE FLASHLIGHT");
-    ty -= lh;
-    draw_text(tx, ty, sz, "ARROWS    - MOVE SCENE LIGHT");
-    ty -= lh * 1.5f;
+    glColor4f(1,0.9f,0.5f,1);
+    draw_text(tx,ty,sz,"LIGHTING:"); ty-=lh;
+    glColor4f(0.8f,0.8f,0.8f,0.9f);
+    draw_text(tx,ty,sz,"+/-        - BRIGHTNESS UP/DOWN"); ty-=lh;
+    draw_text(tx,ty,sz,"L          - CYCLE LIGHT COLOR"); ty-=lh;
+    draw_text(tx,ty,sz,"F          - TOGGLE FLASHLIGHT"); ty-=lh;
+    draw_text(tx,ty,sz,"ARROWS     - MOVE SCENE LIGHT"); ty-=lh*1.3f;
 
-    glColor4f(1.0f, 0.9f, 0.5f, 1.0f);
-    draw_text(tx, ty, sz, "OTHER:");
-    ty -= lh;
-    glColor4f(0.8f, 0.8f, 0.8f, 0.9f);
-    draw_text(tx, ty, sz, "F1        - TOGGLE THIS HELP");
-    ty -= lh;
-    draw_text(tx, ty, sz, "R         - RESTART (WHEN DEAD)");
-    ty -= lh;
-    draw_text(tx, ty, sz, "ESC       - QUIT");
+    glColor4f(1,0.9f,0.5f,1);
+    draw_text(tx,ty,sz,"PICKUPS:"); ty-=lh;
+    glColor4f(0.5f,1.0f,0.5f,0.9f);
+    draw_text(tx,ty,sz,"GREEN CUBE - HEALTH (+25)"); ty-=lh;
+    glColor4f(1.0f,0.9f,0.4f,0.9f);
+    draw_text(tx,ty,sz,"YELLOW CUBE - AMMO (+15 PSTL, +4 SHTG)"); ty-=lh;
+    glColor4f(0.4f,0.6f,1.0f,0.9f);
+    draw_text(tx,ty,sz,"BLUE CUBE  - ARMOR (+25)"); ty-=lh*1.3f;
+
+    glColor4f(0.8f,0.8f,0.8f,0.9f);
+    draw_text(tx,ty,sz,"F1 - TOGGLE HELP  R - RESTART  ESC - QUIT");
 
     ortho_end();
 }
@@ -1070,12 +1358,9 @@ static void draw_help_screen(void) {
 
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
-
     char asset_dir[512] = "assets";
 
-    if(SDL_Init(SDL_INIT_VIDEO)<0){
-        fprintf(stderr,"SDL_Init: %s\n",SDL_GetError()); return 1;
-    }
+    if(SDL_Init(SDL_INIT_VIDEO)<0) { fprintf(stderr,"SDL_Init: %s\n",SDL_GetError()); return 1; }
 
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,2);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,1);
@@ -1083,43 +1368,37 @@ int main(int argc, char *argv[]) {
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE,24);
 
     SDL_Window *win = SDL_CreateWindow(WINDOW_TITLE,
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        WINDOW_W, WINDOW_H, SDL_WINDOW_OPENGL|SDL_WINDOW_SHOWN);
-    if(!win){ fprintf(stderr,"SDL_CreateWindow: %s\n",SDL_GetError()); return 1; }
+        SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,
+        WINDOW_W,WINDOW_H,SDL_WINDOW_OPENGL|SDL_WINDOW_SHOWN);
+    if(!win) { fprintf(stderr,"SDL_CreateWindow: %s\n",SDL_GetError()); return 1; }
 
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
-    if(!ctx){ fprintf(stderr,"SDL_GL_CreateContext: %s\n",SDL_GetError()); return 1; }
+    if(!ctx) { fprintf(stderr,"SDL_GL_CreateContext: %s\n",SDL_GetError()); return 1; }
 
     SDL_GL_SetSwapInterval(1);
     SDL_SetRelativeMouseMode(SDL_TRUE);
 
-    glEnable(GL_DEPTH_TEST);
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);
-    glClearColor(0.02f,0.02f,0.05f,1);
-    glShadeModel(GL_SMOOTH);
+    glEnable(GL_DEPTH_TEST); glEnable(GL_CULL_FACE); glCullFace(GL_BACK);
+    glClearColor(0.02f,0.02f,0.05f,1); glShadeModel(GL_SMOOTH);
 
     if(!load_all_models(asset_dir)) {
-        fprintf(stderr,"Failed to load models from '%s/'\n", asset_dir);
-        fprintf(stderr,"Make sure cube.obj, sphere.obj, barrel.obj are in the assets/ folder.\n");
-        SDL_GL_DeleteContext(ctx);
-        SDL_DestroyWindow(win);
-        SDL_Quit();
-        return 1;
+        fprintf(stderr,"Failed to load models from '%s/'\n",asset_dir);
+        SDL_GL_DeleteContext(ctx); SDL_DestroyWindow(win); SDL_Quit(); return 1;
     }
 
     init_textures();
     build_all_display_lists();
+    srand((unsigned)time(NULL));
     init_level();
     set_projection();
 
-    Uint32 prev = SDL_GetTicks();
+    Uint32 prev=SDL_GetTicks();
     int running=1;
 
     while(running) {
         Uint32 now=SDL_GetTicks();
         float dt=(now-prev)/1000.0f;
-        if(dt>0.05f) dt=0.05f;
+        if(dt>0.05f)dt=0.05f;
         prev=now;
 
         SDL_Event ev;
@@ -1128,70 +1407,60 @@ int main(int argc, char *argv[]) {
             if(ev.type==SDL_KEYDOWN) {
                 switch(ev.key.keysym.sym) {
                     case SDLK_ESCAPE: running=0; break;
-                    case SDLK_F1:     show_help = !show_help; break;
-                    case SDLK_f:      flashlight_on = !flashlight_on; break;
-                    case SDLK_l:
-                        light_color_mode = (light_color_mode + 1) % 3;
+                    case SDLK_F1: show_help=!show_help; break;
+                    case SDLK_f:  flashlight_on=!flashlight_on; break;
+                    case SDLK_l:  light_color_mode=(light_color_mode+1)%3; break;
+                    case SDLK_1:  player.weapon=WPN_FIST; break;
+                    case SDLK_2:  player.weapon=WPN_PISTOL; break;
+                    case SDLK_3:  player.weapon=WPN_SHOTGUN; break;
+                    case SDLK_EQUALS: case SDLK_PLUS: case SDLK_KP_PLUS:
+                        light_brightness+=LIGHT_STEP;
+                        if(light_brightness>LIGHT_MAX) { light_brightness=LIGHT_MAX; }
                         break;
-                    case SDLK_EQUALS:
-                    case SDLK_PLUS:
-                    case SDLK_KP_PLUS:
-                        light_brightness += LIGHT_STEP;
-                        if(light_brightness > LIGHT_MAX) light_brightness = LIGHT_MAX;
-                        break;
-                    case SDLK_MINUS:
-                    case SDLK_KP_MINUS:
-                        light_brightness -= LIGHT_STEP;
-                        if(light_brightness < LIGHT_MIN) light_brightness = LIGHT_MIN;
+                    case SDLK_MINUS: case SDLK_KP_MINUS:
+                        light_brightness-=LIGHT_STEP;
+                        if(light_brightness<LIGHT_MIN) { light_brightness=LIGHT_MIN; }
                         break;
                     case SDLK_r:
-                        if(game_over||game_win) {
-                            game_over=0; game_win=0;
-                            init_level();
-                        }
-                        break;
-                    default: break;
+                        if(game_over||game_win) { game_over=0;game_win=0;init_level(); } break;
+                    default:break;
                 }
             }
             if(ev.type==SDL_MOUSEMOTION && !game_over && !game_win && !show_help) {
-                player.yaw   -= ev.motion.xrel * TURN_SPEED;
-                player.pitch -= ev.motion.yrel * TURN_SPEED;
-                if(player.pitch> 1.4f) player.pitch= 1.4f;
-                if(player.pitch<-1.4f) player.pitch=-1.4f;
+                player.yaw-=ev.motion.xrel*TURN_SPEED;
+                player.pitch-=ev.motion.yrel*TURN_SPEED;
+                if(player.pitch>1.4f)player.pitch=1.4f;
+                if(player.pitch<-1.4f)player.pitch=-1.4f;
             }
-            if(ev.type==SDL_MOUSEBUTTONDOWN&&ev.button.button==SDL_BUTTON_LEFT && !show_help)
+            if(ev.type==SDL_MOUSEBUTTONDOWN&&ev.button.button==SDL_BUTTON_LEFT&&!show_help)
                 shoot();
         }
 
-        if(!show_help)
-            update(dt);
+        if(!show_help) update(dt);
 
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         set_camera();
         setup_lighting();
         draw_level();
         draw_decorations();
+        draw_pickups();
         draw_enemies();
         draw_light_marker();
-        draw_hud();
+        draw_doom_hud();
 
-        if(show_help)
-            draw_help_screen();
+        if(show_help) draw_help_screen();
 
         SDL_GL_SwapWindow(win);
     }
 
-    glDeleteLists(model_cube.display_list, 1);
-    glDeleteLists(model_enemy.display_list, 1);
-    glDeleteLists(model_barrel.display_list, 1);
-    glDeleteTextures(1,&tex_wall);
-    glDeleteTextures(1,&tex_floor);
-    glDeleteTextures(1,&tex_ceil);
-    glDeleteTextures(1,&tex_enemy);
-    glDeleteTextures(1,&tex_crate);
-    glDeleteTextures(1,&tex_barrel);
-    SDL_GL_DeleteContext(ctx);
-    SDL_DestroyWindow(win);
-    SDL_Quit();
+    glDeleteLists(model_cube.display_list,1);
+    glDeleteLists(model_enemy.display_list,1);
+    glDeleteLists(model_barrel.display_list,1);
+    glDeleteTextures(1,&tex_wall); glDeleteTextures(1,&tex_floor);
+    glDeleteTextures(1,&tex_ceil); glDeleteTextures(1,&tex_enemy);
+    glDeleteTextures(1,&tex_crate); glDeleteTextures(1,&tex_barrel);
+    glDeleteTextures(1,&tex_pickup_health); glDeleteTextures(1,&tex_pickup_ammo);
+    glDeleteTextures(1,&tex_pickup_armor);
+    SDL_GL_DeleteContext(ctx); SDL_DestroyWindow(win); SDL_Quit();
     return 0;
 }
