@@ -1012,7 +1012,7 @@ static void setup_lighting(void) {
         glLightf(GL_LIGHT1,GL_QUADRATIC_ATTENUATION,0.02f);
     } else glDisable(GL_LIGHT1);
 
-    float ga[]={0.08f,0.08f,0.10f,1};
+    float ga[]={0.25f,0.25f,0.28f,1};
     glLightModelfv(GL_LIGHT_MODEL_AMBIENT,ga);
 }
 
@@ -1048,10 +1048,10 @@ static void draw_level(void) {
         float x0=(float)c,z0=(float)r,x1=x0+1,z1=z0+1;
         char ch = MAP_ROWS[r][c];
         if(ch!='#' && ch!='W') {
-            glBindTexture(GL_TEXTURE_2D,tex_floor);glColor3f(0.9f,0.9f,0.9f);
-            quad_n(x0,FLOOR_Y,z0,x1,FLOOR_Y,z0,x1,FLOOR_Y,z1,x0,FLOOR_Y,z1,0,1,0,1,1);
+            glBindTexture(GL_TEXTURE_2D,tex_floor);glColor3f(1.0f,1.0f,1.0f);
+            quad_n(x0,FLOOR_Y,z1,x1,FLOOR_Y,z1,x1,FLOOR_Y,z0,x0,FLOOR_Y,z0,0,1,0,1,1);
             glBindTexture(GL_TEXTURE_2D,tex_ceil);glColor3f(0.6f,0.6f,0.7f);
-            quad_n(x0,CEIL_Y,z1,x1,CEIL_Y,z1,x1,CEIL_Y,z0,x0,CEIL_Y,z0,0,-1,0,1,1);
+            quad_n(x0,CEIL_Y,z0,x1,CEIL_Y,z0,x1,CEIL_Y,z1,x0,CEIL_Y,z1,0,-1,0,1,1);
         }
         /* Solid walls only - windows drawn in transparency pass */
         if(ch=='#') {
