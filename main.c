@@ -71,7 +71,7 @@
 
 #define SHOOT_COOLDOWN_FIST   0.4f
 #define SHOOT_COOLDOWN_PISTOL 0.3f
-#define SHOOT_COOLDOWN_SHOTGUN 0.7f
+#define SHOOT_COOLDOWN_SHOTGUN 0.9f
 #define MUZZLE_TIME          0.08f
 
 #define FIST_DAMAGE     2
@@ -81,6 +81,11 @@
 #define PISTOL_RANGE    50.0f
 #define SHOTGUN_RANGE   15.0f
 #define SHOTGUN_SPREAD  0.8f
+
+/* Pickup spawn counts (adjust these to control item density) */
+#define PICKUP_COUNT_HEALTH  8
+#define PICKUP_COUNT_AMMO    8
+#define PICKUP_COUNT_ARMOR   8
 
 /* Particle system */
 #define MAX_PARTICLES    512
@@ -682,6 +687,7 @@ typedef struct {
     Vec3 pos; float yaw, pitch, vy;
     int on_ground, health, armor, ammo_pistol, ammo_shotgun;
     WeaponType weapon; float shoot_cd, muzzle_flash;
+    float damage_flash; /* timer for red screen flash when hit */
 } Player;
 
 static Player player;
@@ -706,7 +712,7 @@ static int show_help = 0;
 
 /* Fog state */
 static int fog_enabled = 1;
-static float fog_density = 0.12f;
+static float fog_density = 0.18f;
 
 static int game_over = 0, game_win = 0;
 static float game_time = 0;
@@ -755,12 +761,12 @@ static void init_level(void) {
             player.yaw=0;player.pitch=0;player.vy=0;player.on_ground=1;
             player.health=100;player.armor=0;
             player.ammo_pistol=50;player.ammo_shotgun=10;
-            player.weapon=WPN_PISTOL;player.shoot_cd=0;player.muzzle_flash=0;
+            player.weapon=WPN_PISTOL;player.shoot_cd=0;player.muzzle_flash=0;player.damage_flash=0;
         } else if(ch=='E') enemy_spawn(c+0.5f,r+0.5f);
           else if(ch=='B') deco_spawn(c+0.5f,r+0.5f,DECO_BARREL);
           else if(ch=='C') deco_spawn(c+0.5f,r+0.5f,DECO_CRATE);
     }
-    scatter_pickups(12,15,8);
+    scatter_pickups(PICKUP_COUNT_HEALTH, PICKUP_COUNT_AMMO, PICKUP_COUNT_ARMOR);
 }
 
 /* ──────────────────────────── Shooting ─────────────────────────────────── */
@@ -846,9 +852,15 @@ static void update(float dt) {
     if(!player.on_ground) player.vy-=GRAVITY*dt;
     player.pos.y+=player.vy*dt;
     if(player.pos.y<=PLAYER_HEIGHT){player.pos.y=PLAYER_HEIGHT;player.vy=0;player.on_ground=1;}
+    /* Ceiling collision - stop head from clipping through */
+    if(player.pos.y > CEIL_Y - 0.1f) {
+        player.pos.y = CEIL_Y - 0.1f;
+        player.vy = 0;
+    }
     if(keys[SDL_SCANCODE_SPACE]&&player.on_ground){player.vy=JUMP_VEL;player.on_ground=0;}
     if(player.shoot_cd>0) player.shoot_cd-=dt;
     if(player.muzzle_flash>0) player.muzzle_flash-=dt;
+    if(player.damage_flash>0) player.damage_flash-=dt;
 
     float lms=5.0f*dt;
     if(keys[SDL_SCANCODE_UP])    ambient_light_pos[2]+=lms;
@@ -917,6 +929,7 @@ static void update(float dt) {
                 int dmg=10;
                 if(player.armor>0){int ab=dmg/2;if(ab>player.armor)ab=player.armor;player.armor-=ab;dmg-=ab;}
                 player.health-=dmg;
+                player.damage_flash=0.3f; /* red flash */
                 if(player.health<=0){player.health=0;game_over=1;}
                 e->attack_cooldown=0.8f;
             }
@@ -948,11 +961,7 @@ static void update(float dt) {
         }
     }
 
-    /* Animate decorations */
-    for(int i=0;i<deco_count;i++) {
-        decorations[i].rotation+=15.0f*dt;
-        if(decorations[i].rotation>360.0f) decorations[i].rotation-=360.0f;
-    }
+    /* Decorations are static - no rotation */
 
     /* Emit fire/smoke particles from barrels */
     for(int i=0;i<deco_count;i++) {
@@ -970,7 +979,7 @@ static void setup_fog(void) {
     if(fog_enabled) {
         glEnable(GL_FOG);
         glFogi(GL_FOG_MODE, GL_EXP2);
-        float fog_color[] = {0.02f, 0.02f, 0.05f, 1.0f}; /* match clear color */
+        float fog_color[] = {0.15f, 0.15f, 0.18f, 1.0f}; /* visible gray fog */
         glFogfv(GL_FOG_COLOR, fog_color);
         glFogf(GL_FOG_DENSITY, fog_density);
         glHint(GL_FOG_HINT, GL_NICEST);
@@ -1012,7 +1021,7 @@ static void setup_lighting(void) {
         glLightf(GL_LIGHT1,GL_QUADRATIC_ATTENUATION,0.02f);
     } else glDisable(GL_LIGHT1);
 
-    float ga[]={0.08f,0.08f,0.10f,1};
+    float ga[]={0.25f,0.25f,0.28f,1};
     glLightModelfv(GL_LIGHT_MODEL_AMBIENT,ga);
 }
 
@@ -1048,10 +1057,10 @@ static void draw_level(void) {
         float x0=(float)c,z0=(float)r,x1=x0+1,z1=z0+1;
         char ch = MAP_ROWS[r][c];
         if(ch!='#' && ch!='W') {
-            glBindTexture(GL_TEXTURE_2D,tex_floor);glColor3f(0.9f,0.9f,0.9f);
-            quad_n(x0,FLOOR_Y,z0,x1,FLOOR_Y,z0,x1,FLOOR_Y,z1,x0,FLOOR_Y,z1,0,1,0,1,1);
+            glBindTexture(GL_TEXTURE_2D,tex_floor);glColor3f(1.0f,1.0f,1.0f);
+            quad_n(x0,FLOOR_Y,z1,x1,FLOOR_Y,z1,x1,FLOOR_Y,z0,x0,FLOOR_Y,z0,0,1,0,1,1);
             glBindTexture(GL_TEXTURE_2D,tex_ceil);glColor3f(0.6f,0.6f,0.7f);
-            quad_n(x0,CEIL_Y,z1,x1,CEIL_Y,z1,x1,CEIL_Y,z0,x0,CEIL_Y,z0,0,-1,0,1,1);
+            quad_n(x0,CEIL_Y,z0,x1,CEIL_Y,z0,x1,CEIL_Y,z1,x0,CEIL_Y,z1,0,-1,0,1,1);
         }
         /* Solid walls only - windows drawn in transparency pass */
         if(ch=='#') {
@@ -1101,11 +1110,30 @@ static void draw_windows(void) {
 
 /* ──────────── Shadows: dark blobs projected onto floor ─────────────────── */
 
-static void draw_shadow_blob(float x, float z, float radius) {
+/* ──────────── Shadows: projected geometry onto floor plane ─────────────── */
+
+/* Build a shadow projection matrix that flattens geometry onto the Y=FLOOR_Y plane
+ * from a light position. This projects the actual 3D shape of objects. */
+static void make_shadow_matrix(float mat[16], float lx, float ly, float lz) {
+    /* Project onto Y = FLOOR_Y plane (normal = 0,1,0, d = -FLOOR_Y) */
+    float ny = 1.0f;
+    float d  = -FLOOR_Y;
+    float dot = ny * ly + d; /* simplified: light dot plane */
+
+    mat[ 0] = dot;        mat[ 1] = 0;     mat[ 2] = 0;     mat[ 3] = 0;
+    mat[ 4] = -lx * ny;   mat[ 5] = dot - ly*ny; mat[ 6] = -lz*ny; mat[ 7] = -ny;
+    mat[ 8] = 0;          mat[ 9] = 0;     mat[10] = dot;    mat[11] = 0;
+    mat[12] = -lx * d;    mat[13] = -ly*d; mat[14] = -lz*d;  mat[15] = dot;
+    (void)lx;(void)lz;
+}
+
+static void draw_shadow_oval(float x, float z, float rx, float rz) {
+    glEnable(GL_TEXTURE_2D);
+    glBindTexture(GL_TEXTURE_2D, tex_shadow);
     glPushMatrix();
-    glTranslatef(x, FLOOR_Y + 0.01f, z); /* slightly above floor */
-    glRotatef(-90, 1, 0, 0); /* lay flat */
-    glScalef(radius, radius, 1);
+    glTranslatef(x, FLOOR_Y + 0.01f, z);
+    glRotatef(-90, 1, 0, 0);
+    glScalef(rx, rz, 1);
     glBegin(GL_QUADS);
     glTexCoord2f(0,0); glVertex3f(-1, -1, 0);
     glTexCoord2f(1,0); glVertex3f( 1, -1, 0);
@@ -1113,38 +1141,80 @@ static void draw_shadow_blob(float x, float z, float radius) {
     glTexCoord2f(0,1); glVertex3f(-1,  1, 0);
     glEnd();
     glPopMatrix();
+    glDisable(GL_TEXTURE_2D);
 }
 
 static void draw_shadows(void) {
     glDisable(GL_LIGHTING);
-    glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
-    glBindTexture(GL_TEXTURE_2D, tex_shadow);
-    glColor4f(1,1,1,1);
 
-    /* Enemy shadows */
+    glEnable(GL_STENCIL_TEST);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(-1.0f, -1.0f);
+    glDisable(GL_CULL_FACE);
+
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+
+    /* Enemy shadows - soft oval (sphere projection looks like a donut) */
     for(int i=0;i<enemy_count;i++) {
         if(!enemies[i].alive) continue;
-        draw_shadow_blob(enemies[i].pos.x, enemies[i].pos.z, 0.5f);
+        glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+        draw_shadow_oval(enemies[i].pos.x, enemies[i].pos.z, 0.5f, 0.5f);
     }
 
-    /* Decoration shadows */
+    /* Decoration shadows - oval for barrels, projected geometry for crates */
+    float shadow_mat[16];
     for(int i=0;i<deco_count;i++) {
-        float r = (decorations[i].type==DECO_BARREL) ? 0.35f : 0.45f;
-        draw_shadow_blob(decorations[i].pos.x, decorations[i].pos.z, r);
+        Vec3 p = decorations[i].pos;
+        glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+
+        if(decorations[i].type == DECO_BARREL) {
+            /* Oval shadow for barrels (cylinder projection looks odd) */
+            draw_shadow_oval(p.x, p.z, 0.4f, 0.4f);
+        } else {
+            /* Projected box shadow for crates - looks proper */
+            glDisable(GL_TEXTURE_2D);
+            glColor4f(0.0f, 0.0f, 0.0f, 0.4f);
+            make_shadow_matrix(shadow_mat, p.x, CEIL_Y - 0.1f, p.z);
+            glPushMatrix();
+            glMultMatrixf(shadow_mat);
+            glTranslatef(p.x, p.y, p.z);
+            glRotatef(decorations[i].rotation, 0,1,0);
+            glScalef(0.7f, 0.7f, 0.7f);
+            obj_draw(&model_cube);
+            glPopMatrix();
+            glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        }
     }
 
-    /* Pickup shadows (smaller) */
+    /* Pickup shadows - projected cube (small, looks fine) */
+    glDisable(GL_TEXTURE_2D);
+    glColor4f(0.0f, 0.0f, 0.0f, 0.4f);
     for(int i=0;i<pickup_count;i++) {
         if(!pickups[i].active) continue;
-        draw_shadow_blob(pickups[i].pos.x, pickups[i].pos.z, 0.2f);
+        Vec3 p = pickups[i].pos;
+        float bob = sinf(pickups[i].bob_phase)*0.1f;
+
+        make_shadow_matrix(shadow_mat, p.x, CEIL_Y - 0.1f, p.z);
+        glStencilFunc(GL_NOTEQUAL, 1, 0xFF);
+        glPushMatrix();
+        glMultMatrixf(shadow_mat);
+        glTranslatef(p.x, p.y+bob, p.z);
+        glRotatef(game_time*90, 0,1,0);
+        glScalef(0.3f, 0.3f, 0.3f);
+        obj_draw(&model_cube);
+        glPopMatrix();
     }
 
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glEnable(GL_CULL_FACE);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
-    glDisable(GL_TEXTURE_2D);
     glEnable(GL_LIGHTING);
 }
 
@@ -1336,12 +1406,109 @@ static void draw_doom_hud(void) {
      glColor4f(0.65f,0.55f,0.45f,1);draw_text(sx+10,bar_y+10,1.2f,"SHTG");
      snprintf(buf,sizeof(buf),"%d",player.ammo_shotgun);glColor4f(0.9f,0.8f,0.2f,1);draw_text(sx+70,bar_y+8,2.0f,buf);}
 
+    /* ─── Weapon icon (centered above status bar) ─── */
+    {
+        float icon_w=80, icon_h=50;
+        float icon_x=WINDOW_W/2-icon_w/2;
+        float icon_y=bar_h+8;
+
+        /* Background */
+        fill_rect(icon_x-2, icon_y-2, icon_w+4, icon_h+4, 0.1f,0.1f,0.1f,0.7f);
+        fill_rect(icon_x, icon_y, icon_w, icon_h, 0.18f,0.18f,0.18f,0.8f);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA,GL_ONE_MINUS_SRC_ALPHA);
+
+        switch(player.weapon) {
+            case WPN_FIST:
+                /* Simple raised fist silhouette */
+                /* Wrist */
+                fill_rect(icon_x+30, icon_y+4, 20, 14, 0.85f,0.68f,0.52f,0.9f);
+                /* Main fist body */
+                fill_rect(icon_x+24, icon_y+16, 32, 28, 0.85f,0.68f,0.52f,0.9f);
+                /* Thumb */
+                fill_rect(icon_x+18, icon_y+16, 8, 16, 0.80f,0.63f,0.48f,0.9f);
+                break;
+
+            case WPN_PISTOL:
+                /* Side-view pistol with more detail */
+                /* Slide (top of gun) */
+                fill_rect(icon_x+24, icon_y+30, 42, 10, 0.45f,0.45f,0.50f,0.9f);
+                /* Slide serrations (rear) */
+                fill_rect(icon_x+24, icon_y+31, 2, 8, 0.38f,0.38f,0.42f,0.7f);
+                fill_rect(icon_x+28, icon_y+31, 2, 8, 0.38f,0.38f,0.42f,0.7f);
+                fill_rect(icon_x+32, icon_y+31, 2, 8, 0.38f,0.38f,0.42f,0.7f);
+                /* Barrel */
+                fill_rect(icon_x+62, icon_y+32, 12, 6, 0.35f,0.35f,0.40f,0.9f);
+                /* Muzzle hole */
+                fill_rect(icon_x+72, icon_y+33, 3, 4, 0.15f,0.15f,0.15f,0.9f);
+                /* Frame / lower receiver */
+                fill_rect(icon_x+26, icon_y+22, 36, 8, 0.50f,0.50f,0.55f,0.9f);
+                /* Trigger guard */
+                fill_rect(icon_x+40, icon_y+14, 14, 8, 0.50f,0.50f,0.55f,0.9f);
+                fill_rect(icon_x+42, icon_y+16, 10, 4, 0.18f,0.18f,0.18f,0.8f);
+                /* Trigger */
+                fill_rect(icon_x+46, icon_y+18, 3, 6, 0.55f,0.55f,0.60f,0.9f);
+                /* Grip */
+                fill_rect(icon_x+26, icon_y+6, 14, 18, 0.35f,0.28f,0.18f,0.9f);
+                /* Grip texture lines */
+                fill_rect(icon_x+28, icon_y+8, 10, 1, 0.30f,0.23f,0.14f,0.6f);
+                fill_rect(icon_x+28, icon_y+11, 10, 1, 0.30f,0.23f,0.14f,0.6f);
+                fill_rect(icon_x+28, icon_y+14, 10, 1, 0.30f,0.23f,0.14f,0.6f);
+                /* Front sight */
+                fill_rect(icon_x+62, icon_y+40, 3, 4, 0.50f,0.50f,0.55f,0.9f);
+                /* Rear sight */
+                fill_rect(icon_x+26, icon_y+40, 3, 3, 0.50f,0.50f,0.55f,0.9f);
+                fill_rect(icon_x+32, icon_y+40, 3, 3, 0.50f,0.50f,0.55f,0.9f);
+                break;
+
+            case WPN_SHOTGUN:
+                /* Draw a shotgun icon */
+                glColor4f(0.5f,0.5f,0.55f,0.9f);
+                /* Long barrel */
+                fill_rect(icon_x+10, icon_y+30, 62, 6, 0.5f,0.5f,0.55f,0.9f);
+                /* Second barrel (double) */
+                fill_rect(icon_x+10, icon_y+24, 62, 6, 0.55f,0.55f,0.6f,0.9f);
+                /* Receiver */
+                fill_rect(icon_x+10, icon_y+18, 24, 14, 0.45f,0.45f,0.5f,0.9f);
+                /* Stock */
+                fill_rect(icon_x+4, icon_y+12, 14, 20, 0.45f,0.32f,0.18f,0.9f);
+                /* Grip */
+                fill_rect(icon_x+22, icon_y+6, 10, 14, 0.4f,0.3f,0.18f,0.9f);
+                /* Pump */
+                fill_rect(icon_x+40, icon_y+18, 16, 6, 0.4f,0.3f,0.2f,0.9f);
+                break;
+        }
+
+        /* Weapon name label */
+        const char *wpn_label[] = {"FIST","PISTOL","SHOTGUN"};
+        glColor4f(0.9f,0.85f,0.6f,0.9f);
+        float lbl_x = icon_x + icon_w/2 - (float)strlen(wpn_label[player.weapon])*1.2f*9/2;
+        draw_text(lbl_x, icon_y-14, 1.2f, wpn_label[player.weapon]);
+
+        glDisable(GL_BLEND);
+    }
+
     /* Crosshair */
     int cx=WINDOW_W/2,cy=WINDOW_H/2;
     fill_rect(cx-12,cy-2,10,4,1,1,1,0.8f);fill_rect(cx+2,cy-2,10,4,1,1,1,0.8f);
     fill_rect(cx-2,cy-12,4,10,1,1,1,0.8f);fill_rect(cx-2,cy+2,4,10,1,1,1,0.8f);
 
     if(player.muzzle_flash>0){float a=player.muzzle_flash/MUZZLE_TIME;fill_rect(0,0,WINDOW_W,WINDOW_H,1,0.8f,0,0.15f*a);}
+
+    /* Damage indicator: red vignette around screen edges */
+    if(player.damage_flash>0) {
+        float a = (player.damage_flash / 0.3f) * 0.45f; /* fade out over 0.3s */
+        int vw = 80; /* vignette border width */
+        /* Left edge */
+        fill_rect(0, 0, vw, WINDOW_H, 0.8f, 0.0f, 0.0f, a);
+        /* Right edge */
+        fill_rect(WINDOW_W-vw, 0, vw, WINDOW_H, 0.8f, 0.0f, 0.0f, a);
+        /* Top edge */
+        fill_rect(0, WINDOW_H-vw, WINDOW_W, vw, 0.8f, 0.0f, 0.0f, a*0.7f);
+        /* Bottom edge (above HUD bar) */
+        fill_rect(0, bar_h, WINDOW_W, vw, 0.8f, 0.0f, 0.0f, a*0.7f);
+    }
 
     /* Top info */
     glColor4f(1,1,0.6f,0.5f);
@@ -1408,7 +1575,7 @@ static void draw_help_screen(void) {
     glColor4f(0.8f,0.8f,0.8f,0.9f);
     draw_text(tx,ty,sz,"FOG, PARTICLES (FIRE+BLOOD),");ty-=lh;
     draw_text(tx,ty,sz,"TRANSPARENCY (GLASS WINDOWS),");ty-=lh;
-    draw_text(tx,ty,sz,"SHADOWS (PROJECTED BLOBS)");ty-=lh*1.2f;
+    draw_text(tx,ty,sz,"SHADOWS (PROJECTED GEOMETRY)");ty-=lh*1.2f;
 
     glColor4f(0.8f,0.8f,0.8f,0.9f);
     draw_text(tx,ty,sz,"F1 - HELP   R - RESTART   ESC - QUIT");
@@ -1427,6 +1594,7 @@ int main(int argc, char *argv[]) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,1);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER,1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE,24);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE,8);
 
     SDL_Window *win=SDL_CreateWindow(WINDOW_TITLE,SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,WINDOW_W,WINDOW_H,SDL_WINDOW_OPENGL|SDL_WINDOW_SHOWN);
     if(!win){fprintf(stderr,"SDL_CreateWindow: %s\n",SDL_GetError());return 1;}
@@ -1435,7 +1603,7 @@ int main(int argc, char *argv[]) {
     SDL_GL_SetSwapInterval(1);SDL_SetRelativeMouseMode(SDL_TRUE);
 
     glEnable(GL_DEPTH_TEST);glEnable(GL_CULL_FACE);glCullFace(GL_BACK);
-    glClearColor(0.02f,0.02f,0.05f,1);glShadeModel(GL_SMOOTH);
+    glClearColor(0.15f,0.15f,0.18f,1);glShadeModel(GL_SMOOTH);
 
     if(!load_all_models(asset_dir)){
         fprintf(stderr,"Failed to load models from '%s/'\n",asset_dir);
@@ -1496,7 +1664,7 @@ int main(int argc, char *argv[]) {
 
         if(!show_help) update(dt);
 
-        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_STENCIL_BUFFER_BIT);
         set_camera();
         setup_lighting();
         setup_fog();

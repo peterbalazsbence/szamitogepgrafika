@@ -12,7 +12,7 @@ SRCS    = main.c
 # ── Detect OS ────────────────────────────────────────────────
 ifeq ($(OS),Windows_NT)
     # Windows / MinGW
-    LIBS    = -lSDL2main -lSDL2 -lopengl32 -lglu32 -lm
+    LIBS    = -lmingw32 -lSDL2main -lSDL2 -lopengl32 -lglu32 -lm
     CFLAGS += -DWIN32 -D_WIN32
     TARGET := $(TARGET).exe
 else
