@@ -1,1 +1,19 @@
+# Build artifacts
+obj/
+*.o
 *.exe
+doom3d
+doom3d.exe
+
+# Windows runtime libraries (do NOT commit these)
+*.dll
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS-specific
+.DS_Store
+Thumbs.db

@@ -3,11 +3,16 @@
 #  Supports: Windows (MinGW / MSYS2) and Linux
 # ─────────────────────────────────────────────────────────────
 
-TARGET  = doom3d
+TARGET    = doom3d
 
-CC      = gcc
-CFLAGS  = -std=c99 -Wall -Wextra -O2
-SRCS    = main.c
+CC        = gcc
+CFLAGS    = -std=c99 -Wall -Wextra -O2 -Iinclude
+SRCDIR    = src
+OBJDIR    = obj
+
+# All .c files in src/
+SRCS      = $(wildcard $(SRCDIR)/*.c)
+OBJS      = $(patsubst $(SRCDIR)/%.c, $(OBJDIR)/%.o, $(SRCS))
 
 # ── Detect OS ────────────────────────────────────────────────
 ifeq ($(OS),Windows_NT)
@@ -23,10 +28,16 @@ endif
 
 all: $(TARGET)
 
-$(TARGET): $(SRCS)
-	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LIBS)
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LIBS)
+
+$(OBJDIR)/%.o: $(SRCDIR)/%.c | $(OBJDIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJDIR):
+	mkdir -p $(OBJDIR)
 
 clean:
-	rm -f $(TARGET)
+	rm -rf $(OBJDIR) $(TARGET)
 
 .PHONY: all clean
