@@ -1,14 +1,11 @@
 # DOOM3D
 
-A Doom-inspired 3D first-person shooter built from scratch in C using SDL2 and
-OpenGL 2.1 (fixed-function pipeline). The game is a single-level dungeon crawler
-where the player must eliminate all enemies while collecting pickups scattered
-around the map.
+A Doom-inspired 3D first-person shooter built in C using SDL2 and
+OpenGL 2.1.
 
 ## Feladat specifikáció (Project specification)
 
-The game implements the required features for the Computer Graphics
-(Számítógépi grafika) course assignment:
+The game implements the required features:
 
 ### Minimum requirements
 
@@ -16,8 +13,8 @@ The game implements the required features for the Computer Graphics
 |---|---|
 | Camera control (mouse/keyboard) | First-person mouse look (yaw + pitch) and WASD + strafe movement |
 | 3D objects loaded from files | OBJ loader reads `cube.obj`, `sphere.obj`, `barrel.obj` from `assets/` |
-| Animation / movement | Enemy bobbing, pickup rotation, barrel fire particles, muzzle flash, enemy chase AI |
-| Textures | All models and level surfaces are textured (procedurally generated at runtime) |
+| Animation / movement | Enemy bobbing, pickup rotation, barrel fire particles, muzzle flash, enemy AI |
+| Textures | All models and level surface textures are procedurally generated at runtime |
 | Adjustable lights (+/-) | Scene light brightness controlled by `+` / `-`; movable with arrow keys; color cycled with `L`; flashlight toggled with `F` |
 | User guide (F1) | Pressing `F1` displays a full in-game help overlay |
 
@@ -27,7 +24,7 @@ The game implements the required features for the Computer Graphics
 |---|---|
 | Fog | `GL_EXP2` exponential-squared fog, density adjustable with `[` / `]`, toggle with `G` |
 | Particle system | Billboard particles for barrel fire/smoke (additive blend) and blood splatter (alpha blend with gravity) |
-| Transparency | Semi-transparent glass walls (`W` tiles) rendered with RGBA textures in a separate pass |
+| Transparency | Semi-transparent glass walls rendered with RGBA textures in a separate pass |
 | Shadows | Hybrid system: projected geometry shadows (rank-3 projection matrix) for boxes, soft oval textures for rounded objects, stencil-buffered to avoid double-blend |
 | AI | 5-state finite state machine (IDLE → PATROL → CHASE → SEARCH → ATTACK) with line-of-sight raycasting and inter-enemy alerting |
 | Collision detection | Axis-aligned bounding box collision for the player and enemies vs. the grid map, with axis-separated movement for wall sliding |

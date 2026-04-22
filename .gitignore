@@ -5,7 +5,7 @@ obj/
 doom3d
 doom3d.exe
 
-# Windows runtime libraries (do NOT commit these)
+# Windows runtime libraries
 *.dll
 
 # Editor / IDE
