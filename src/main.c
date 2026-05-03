@@ -1,3 +1,9 @@
+/*
+ * DOOM3D - A Doom-like 3D FPS
+ * Built with C, SDL2, and OpenGL 2.1 (fixed-function pipeline)
+ *
+ * See README.md for full project description and controls.
+ */
 
 #include "common.h"
 #include "obj_loader.h"
@@ -12,16 +18,19 @@
 #include "rendering.h"
 #include "shadows.h"
 #include "hud.h"
+#include "font.h"
 
+/* Load everything for a fresh level */
 static void init_level(void) {
     enemies_reset();
     decorations_reset();
     pickups_reset();
     particles_reset();
 
+    /* Walk the map and spawn entities */
     for(int r=0;r<MAP_ROWS_N;r++)
     for(int c=0;c<MAP_COLS;c++) {
-        char ch = MAP_ROWS[r][c];
+        char ch = MAP_DATA[r][c];
         if(ch == 'P') {
             player_reset();
             player.pos = v3(c+0.5f, PLAYER_HEIGHT, r+0.5f);
@@ -34,9 +43,10 @@ static void init_level(void) {
                     PICKUP_COUNT_ARMOR);
 }
 
+/* Per-frame update (when not paused by help screen) */
 static void update(float dt) {
-    if(game_over || game_win) return;
-    game_time += dt;
+    if(ui.game_over || ui.game_win) return;
+    ui.game_time += dt;
 
     player_update(dt);
     enemies_update(dt);
@@ -89,9 +99,23 @@ int main(int argc, char *argv[]) {
     glClearColor(0.15f, 0.15f, 0.18f, 1);
     glShadeModel(GL_SMOOTH);
 
-    /* ─── Load models from assets/ ─── */
+    /* ─── Load all data from assets/ ─── */
     if(!load_all_models(asset_dir)) {
         fprintf(stderr, "Failed to load models from '%s/'\n", asset_dir);
+        SDL_GL_DeleteContext(ctx);
+        SDL_DestroyWindow(win);
+        SDL_Quit();
+        return 1;
+    }
+    if(!load_map_from_file("assets/map.txt")) {
+        fprintf(stderr, "Failed to load map\n");
+        SDL_GL_DeleteContext(ctx);
+        SDL_DestroyWindow(win);
+        SDL_Quit();
+        return 1;
+    }
+    if(!load_font_from_csv("assets/font.csv")) {
+        fprintf(stderr, "Failed to load font\n");
         SDL_GL_DeleteContext(ctx);
         SDL_DestroyWindow(win);
         SDL_Quit();
@@ -122,32 +146,32 @@ int main(int argc, char *argv[]) {
             if(ev.type == SDL_KEYDOWN) {
                 switch(ev.key.keysym.sym) {
                     case SDLK_ESCAPE: running = 0; break;
-                    case SDLK_F1:     show_help = !show_help; break;
-                    case SDLK_f:      flashlight_on = !flashlight_on; break;
-                    case SDLK_l:      light_color_mode = (light_color_mode + 1) % 3; break;
-                    case SDLK_g:      fog_enabled = !fog_enabled; break;
+                    case SDLK_F1:     ui.show_help = !ui.show_help; break;
+                    case SDLK_f:      light.flashlight_on = !light.flashlight_on; break;
+                    case SDLK_l:      light.color_mode = (light.color_mode + 1) % 3; break;
+                    case SDLK_g:      light.fog_enabled = !light.fog_enabled; break;
                     case SDLK_1:      player.weapon = WPN_FIST; break;
                     case SDLK_2:      player.weapon = WPN_PISTOL; break;
                     case SDLK_3:      player.weapon = WPN_SHOTGUN; break;
                     case SDLK_LEFTBRACKET:
-                        fog_density -= FOG_DENSITY_STEP;
-                        if(fog_density < FOG_DENSITY_MIN) { fog_density = FOG_DENSITY_MIN; }
+                        light.fog_density -= FOG_DENSITY_STEP;
+                        if(light.fog_density < FOG_DENSITY_MIN) { light.fog_density = FOG_DENSITY_MIN; }
                         break;
                     case SDLK_RIGHTBRACKET:
-                        fog_density += FOG_DENSITY_STEP;
-                        if(fog_density > FOG_DENSITY_MAX) { fog_density = FOG_DENSITY_MAX; }
+                        light.fog_density += FOG_DENSITY_STEP;
+                        if(light.fog_density > FOG_DENSITY_MAX) { light.fog_density = FOG_DENSITY_MAX; }
                         break;
                     case SDLK_EQUALS: case SDLK_PLUS: case SDLK_KP_PLUS:
-                        light_brightness += LIGHT_STEP;
-                        if(light_brightness > LIGHT_MAX) { light_brightness = LIGHT_MAX; }
+                        light.brightness += LIGHT_STEP;
+                        if(light.brightness > LIGHT_MAX) { light.brightness = LIGHT_MAX; }
                         break;
                     case SDLK_MINUS: case SDLK_KP_MINUS:
-                        light_brightness -= LIGHT_STEP;
-                        if(light_brightness < LIGHT_MIN) { light_brightness = LIGHT_MIN; }
+                        light.brightness -= LIGHT_STEP;
+                        if(light.brightness < LIGHT_MIN) { light.brightness = LIGHT_MIN; }
                         break;
                     case SDLK_r:
-                        if(game_over || game_win) {
-                            game_over = 0; game_win = 0;
+                        if(ui.game_over || ui.game_win) {
+                            ui.game_over = 0; ui.game_win = 0;
                             init_level();
                         }
                         break;
@@ -157,7 +181,7 @@ int main(int argc, char *argv[]) {
 
             /* Mouse look (only while gameplay is active) */
             if(ev.type == SDL_MOUSEMOTION
-               && !game_over && !game_win && !show_help) {
+               && !ui.game_over && !ui.game_win && !ui.show_help) {
                 player.yaw   -= ev.motion.xrel * TURN_SPEED;
                 player.pitch -= ev.motion.yrel * TURN_SPEED;
                 if(player.pitch >  1.4f) player.pitch =  1.4f;
@@ -165,13 +189,13 @@ int main(int argc, char *argv[]) {
             }
             if(ev.type == SDL_MOUSEBUTTONDOWN
                && ev.button.button == SDL_BUTTON_LEFT
-               && !show_help) {
+               && !ui.show_help) {
                 player_shoot();
             }
         }
 
         /* ── Update world (pause while help screen is open) ── */
-        if(!show_help) update(dt);
+        if(!ui.show_help) update(dt);
 
         /* ── Render ── */
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
@@ -198,7 +222,7 @@ int main(int argc, char *argv[]) {
         particles_draw();
         draw_doom_hud();
 
-        if(show_help) draw_help_screen();
+        if(ui.show_help) draw_help_screen();
 
         SDL_GL_SwapWindow(win);
     }

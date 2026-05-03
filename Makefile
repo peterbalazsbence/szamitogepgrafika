@@ -17,12 +17,12 @@ OBJS      = $(patsubst $(SRCDIR)/%.c, $(OBJDIR)/%.o, $(SRCS))
 # ── Detect OS ────────────────────────────────────────────────
 ifeq ($(OS),Windows_NT)
     # Windows / MinGW
-    LIBS    = -lmingw32 -lSDL2main -lSDL2 -lopengl32 -lglu32 -lm
+    LIBS    = -lmingw32 -lSDL2main -lSDL2 -lopengl32 -lm
     CFLAGS += -DWIN32 -D_WIN32
     TARGET := $(TARGET).exe
 else
     # Linux
-    LIBS    = $(shell sdl2-config --libs) -lGL -lGLU -lm
+    LIBS    = $(shell sdl2-config --libs) -lGL -lm
     CFLAGS += $(shell sdl2-config --cflags)
 endif
 

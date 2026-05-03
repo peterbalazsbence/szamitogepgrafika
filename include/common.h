@@ -8,7 +8,6 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_opengl.h>
 #include <GL/gl.h>
-#include <GL/glu.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,7 +45,7 @@
 #define MAX_DECORATIONS    64
 #define MAX_PICKUPS        64
 
-/* Pickups */
+/* Pickup spawn counts (adjust these to control item density) */
 #define PICKUP_COUNT_HEALTH  12
 #define PICKUP_COUNT_AMMO    15
 #define PICKUP_COUNT_ARMOR   8

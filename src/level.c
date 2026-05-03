@@ -1,68 +1,54 @@
 #include "level.h"
 
-/* 40x40 grid map.
- *  '#' = wall               '.' = floor
- *  'E' = enemy spawn        'P' = player spawn
- *  'B' = barrel             'C' = crate
- *  'W' = glass window (transparent wall, blocks movement & bullets)
- */
-const char *MAP_ROWS[] = {
-    "########################################",
-    "#P.........#.........#.................#",
-    "#..........#.........#.................#",
-    "#..........#....E....W......####.......#",
-    "#...B......#.........W......#..#.......#",
-    "#..........###..######......#..#.......#",
-    "#..........#.........#......####.......#",
-    "#..........W.........#.........E.......#",
-    "#..E.......W.........#.................#",
-    "####.###...#....B....#..........####...#",
-    "#..........#.........#..........#..#...#",
-    "#.....................B.........#..#...#",
-    "#..........#.........#..........####...#",
-    "#..B.......#..E......#.................#",
-    "#..........###.#######.................#",
-    "#..........W.................####......#",
-    "####..######.................#..#......#",
-    "#..........#.........E.......#..#......#",
-    "#..........#.................####......#",
-    "#..E.......#...........................#",
-    "#..........#####W####..................#",
-    "#..........#.........#.....E...........#",
-    "#..........#....B....#.................#",
-    "#..........W.........#.........####....#",
-    "####.###...#.........W.........#..#....#",
-    "#..........#.........W.........#..#....#",
-    "#..........###..######.........####....#",
-    "#.....C....#.........#.................#",
-    "#..........#.........#.................#",
-    "#..E.......#....E....W...E.............#",
-    "#..........#.........#.................#",
-    "####.###...#.........####.######.......#",
-    "#..........#.........................B.#",
-    "#..........#..C......#.................#",
-    "#..B.......#.........W.......E.........#",
-    "#..........###########.................#",
-    "#..............C.......................#",
-    "#...E..................................#",
-    "#......................................#",
-    "########################################",
-};
+char MAP_DATA[MAP_ROWS_N][MAP_COLS+1];
+
+int load_map_from_file(const char *path) {
+    FILE *f = fopen(path, "r");
+    if(!f) {
+        fprintf(stderr, "Cannot open map file: %s\n", path);
+        return 0;
+    }
+    char line[256];
+    int row = 0;
+    while(row < MAP_ROWS_N && fgets(line, sizeof(line), f)) {
+        /* Strip trailing newline / carriage return */
+        size_t len = strlen(line);
+        while(len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
+            line[--len] = 0;
+        }
+        if(len < (size_t)MAP_COLS) {
+            fprintf(stderr, "Map row %d too short (%zu < %d): %s\n",
+                    row, len, MAP_COLS, line);
+            fclose(f);
+            return 0;
+        }
+        memcpy(MAP_DATA[row], line, MAP_COLS);
+        MAP_DATA[row][MAP_COLS] = 0;
+        row++;
+    }
+    fclose(f);
+    if(row != MAP_ROWS_N) {
+        fprintf(stderr, "Map has %d rows, expected %d\n", row, MAP_ROWS_N);
+        return 0;
+    }
+    printf("Loaded map: %s\n", path);
+    return 1;
+}
 
 int map_is_wall(int col, int row) {
     if(row<0||row>=MAP_ROWS_N||col<0||col>=MAP_COLS) return 1;
-    char ch = MAP_ROWS[row][col];
-    return ch=='#' || ch=='W'; /* windows block movement too */
+    char ch = MAP_DATA[row][col];
+    return ch=='#' || ch=='W';
 }
 
 int map_is_solid_wall(int col, int row) {
     if(row<0||row>=MAP_ROWS_N||col<0||col>=MAP_COLS) return 1;
-    return MAP_ROWS[row][col]=='#';
+    return MAP_DATA[row][col]=='#';
 }
 
 int map_is_window(int col, int row) {
     if(row<0||row>=MAP_ROWS_N||col<0||col>=MAP_COLS) return 0;
-    return MAP_ROWS[row][col]=='W';
+    return MAP_DATA[row][col]=='W';
 }
 
 int has_line_of_sight(float x1, float z1, float x2, float z2) {
@@ -76,7 +62,6 @@ int has_line_of_sight(float x1, float z1, float x2, float z2) {
         float cx=x1+dx*t, cz=z1+dz*t;
         int col=(int)floorf(cx), row=(int)floorf(cz);
         if(map_is_solid_wall(col,row)) return 0;
-        /* Windows are transparent for LOS - enemies can see through */
     }
     return 1;
 }

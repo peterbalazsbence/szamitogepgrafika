@@ -4,10 +4,45 @@
 #include "level.h"
 #include "textures.h"
 
+/* builds a perspective projection matrix:*/
+static void perspective_matrix(float fov_deg, float aspect, float znear, float zfar) {
+    float f = 1.0f / tanf(fov_deg * 0.5f * PI / 180.0f);
+    float m[16] = {0};
+    m[0]  = f / aspect;
+    m[5]  = f;
+    m[10] = (zfar + znear) / (znear - zfar);
+    m[11] = -1.0f;
+    m[14] = (2.0f * zfar * znear) / (znear - zfar);
+    glLoadMatrixf(m);
+}
+
+/* Builds a view matrix that puts the camera at `eye` looking toward `center`,
+ * with `up` as the world up vector.*/
+static void look_at(Vec3 eye, Vec3 center, Vec3 up) {
+    Vec3 f = v3norm(v3sub(center, eye));     /* forward */
+    Vec3 upn = v3norm(up);
+    /* side = forward × up */
+    Vec3 s = v3norm(v3(f.y*upn.z - f.z*upn.y,
+                       f.z*upn.x - f.x*upn.z,
+                       f.x*upn.y - f.y*upn.x));
+    /* recomputed up = side × forward */
+    Vec3 u = v3(s.y*f.z - s.z*f.y,
+                s.z*f.x - s.x*f.z,
+                s.x*f.y - s.y*f.x);
+    float m[16] = {
+         s.x,   u.x,  -f.x, 0,
+         s.y,   u.y,  -f.y, 0,
+         s.z,   u.z,  -f.z, 0,
+         0,     0,     0,   1
+    };
+    glMultMatrixf(m);
+    glTranslatef(-eye.x, -eye.y, -eye.z);
+}
+
 void set_projection(void) {
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    gluPerspective(FOV, (float)WINDOW_W/WINDOW_H, NEAR_CLIP, FAR_CLIP);
+    perspective_matrix(FOV, (float)WINDOW_W/WINDOW_H, NEAR_CLIP, FAR_CLIP);
     glMatrixMode(GL_MODELVIEW);
 }
 
@@ -16,7 +51,7 @@ void set_camera(void) {
     Vec3 e = player.pos;
     Vec3 f = player_forward();
     Vec3 c = v3add(e, f);
-    gluLookAt(e.x, e.y, e.z,  c.x, c.y, c.z,  0, 1, 0);
+    look_at(e, c, v3(0, 1, 0));
 }
 
 void quad_n(float x0,float y0,float z0, float x1,float y1,float z1,
@@ -37,7 +72,7 @@ void draw_level(void) {
     for(int r=0;r<MAP_ROWS_N;r++)
     for(int c=0;c<MAP_COLS;c++) {
         float x0=(float)c, z0=(float)r, x1=x0+1, z1=z0+1;
-        char ch = MAP_ROWS[r][c];
+        char ch = MAP_DATA[r][c];
 
         /* Floor & ceiling under open tiles (not walls or windows) */
         if(ch != '#' && ch != 'W') {

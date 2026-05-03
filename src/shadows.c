@@ -102,7 +102,7 @@ void draw_shadows(void) {
         glPushMatrix();
         glMultMatrixf(shadow_mat);
         glTranslatef(p.x, p.y+bob, p.z);
-        glRotatef(game_time*90, 0, 1, 0);
+        glRotatef(ui.game_time*90, 0, 1, 0);
         glScalef(0.3f, 0.3f, 0.3f);
         obj_draw(&model_cube);
         glPopMatrix();

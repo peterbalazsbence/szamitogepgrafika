@@ -161,7 +161,7 @@ void enemies_update(float dt) {
                     }
                     player.health -= dmg;
                     player.damage_flash = 0.3f;
-                    if(player.health <= 0) { player.health = 0; game_over = 1; }
+                    if(player.health <= 0) { player.health = 0; ui.game_over = 1; }
                     e->attack_cooldown = 0.8f;
                 }
                 break;

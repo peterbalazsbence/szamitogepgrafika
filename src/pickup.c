@@ -16,12 +16,14 @@ void pickup_spawn(float x, float z, PickupType type) {
     pickup_count++;
 }
 
+/* Scatter pickups randomly on open floor tiles.
+ * Uses Fisher-Yates shuffle over the list of '.' tiles. */
 void scatter_pickups(int n_health, int n_ammo, int n_armor) {
     int open_tiles[MAP_ROWS_N * MAP_COLS][2];
     int oc = 0;
     for(int r=1;r<MAP_ROWS_N-1;r++)
         for(int c=1;c<MAP_COLS-1;c++)
-            if(MAP_ROWS[r][c] == '.') {
+            if(MAP_DATA[r][c] == '.') {
                 open_tiles[oc][0] = c;
                 open_tiles[oc][1] = r;
                 oc++;
@@ -55,7 +57,7 @@ void draw_pickups(void) {
 
         glPushMatrix();
         glTranslatef(p.x, p.y + bob, p.z);
-        glRotatef(game_time * 90, 0, 1, 0); /* spin on Y axis */
+        glRotatef(ui.game_time * 90, 0, 1, 0); /* spin on Y axis */
         glScalef(0.3f, 0.3f, 0.3f);
 
         switch(pickups[i].type) {

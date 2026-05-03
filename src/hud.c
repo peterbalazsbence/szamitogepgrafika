@@ -4,10 +4,8 @@
 #include "enemy.h"
 #include "lighting.h"
 
-int show_help = 0;
-int game_over = 0;
-int game_win  = 0;
-float game_time = 0;
+/* The single global instance of UI state. */
+GameUI ui = {0};
 
 void ortho_begin(void) {
     glDisable(GL_LIGHTING);
@@ -29,7 +27,7 @@ void ortho_end(void) {
     glMatrixMode(GL_MODELVIEW);
     glPopMatrix();
     glEnable(GL_LIGHTING);
-    if(fog_enabled) glEnable(GL_FOG);
+    if(light.fog_enabled) glEnable(GL_FOG);
 }
 
 void fill_rect(float x, float y, float w, float h,
@@ -248,11 +246,11 @@ void draw_doom_hud(void) {
     char lbuf[80];
     const char *cnames[] = { "WHITE", "RED", "BLUE" };
     snprintf(lbuf, sizeof(lbuf), "LIGHT:%.0f%% %s %s  FOG:%s %.0f%%",
-             light_brightness*100,
-             cnames[light_color_mode],
-             flashlight_on ? "FLASH:ON" : "FLASH:OFF",
-             fog_enabled   ? "ON" : "OFF",
-             fog_density*1000);
+             light.brightness*100,
+             cnames[light.color_mode],
+             light.flashlight_on ? "FLASH:ON" : "FLASH:OFF",
+             light.fog_enabled   ? "ON" : "OFF",
+             light.fog_density*1000);
     draw_text(10, WINDOW_H-20, 1.3f, lbuf);
 
     /* F1 hint */
@@ -268,7 +266,7 @@ void draw_doom_hud(void) {
     draw_text(10, WINDOW_H-40, 1.5f, ebuf);
 
     /* Game over / win overlays */
-    if(game_over) {
+    if(ui.game_over) {
         fill_rect(WINDOW_W/2-200, WINDOW_H/2-50, 400, 100,
                   0.8f, 0.05f, 0.05f, 0.85f);
         glColor4f(1, 1, 1, 1);
@@ -276,7 +274,7 @@ void draw_doom_hud(void) {
         glColor4f(0.8f, 0.8f, 0.8f, 0.8f);
         draw_text(WINDOW_W/2-120, WINDOW_H/2-35, 1.5f, "PRESS R TO RESTART");
     }
-    if(game_win) {
+    if(ui.game_win) {
         fill_rect(WINDOW_W/2-200, WINDOW_H/2-50, 400, 100,
                   0.05f, 0.6f, 0.05f, 0.85f);
         glColor4f(1, 1, 1, 1);

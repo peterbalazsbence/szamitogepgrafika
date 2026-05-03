@@ -1,10 +1,8 @@
 # DOOM3D
 
-A Doom-inspired 3D first-person shooter built in C using SDL2 and
-OpenGL 2.1.
-
 ## Feladat specifikáció (Project specification)
 
+Link to the compressed assets folder uploaded to Google Drive: https://drive.google.com/file/d/1-Foo0I93vtkUBkxMfHNW-OHu3mE7pLnz/view?usp=sharing
 The game implements the required features:
 
 ### Minimum requirements
@@ -107,7 +105,7 @@ make
 ```
 
 ### Windows (MSYS2 / MinGW64)
-Requires SDL2, OpenGL, and GLU libraries. In the MSYS2 MinGW64 terminal:
+Requires SDL2 and OpenGL libraries. In the MSYS2 MinGW64 terminal:
 ```bash
 pacman -S mingw-w64-x86_64-SDL2
 make

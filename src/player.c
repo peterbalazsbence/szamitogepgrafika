@@ -15,7 +15,7 @@ Vec3 player_forward(void) {
 }
 
 void player_update(float dt) {
-    if(game_over || game_win) return;
+    if(ui.game_over || ui.game_win) return;
 
     const Uint8 *keys = SDL_GetKeyboardState(NULL);
 
@@ -66,10 +66,10 @@ void player_update(float dt) {
 
     /* Arrow keys move the scene light (for lighting effects demo) */
     float lms = 5.0f * dt;
-    if(keys[SDL_SCANCODE_UP])    ambient_light_pos[2] += lms;
-    if(keys[SDL_SCANCODE_DOWN])  ambient_light_pos[2] -= lms;
-    if(keys[SDL_SCANCODE_LEFT])  ambient_light_pos[0] -= lms;
-    if(keys[SDL_SCANCODE_RIGHT]) ambient_light_pos[0] += lms;
+    if(keys[SDL_SCANCODE_UP])    light.scene_light_pos[2] += lms;
+    if(keys[SDL_SCANCODE_DOWN])  light.scene_light_pos[2] -= lms;
+    if(keys[SDL_SCANCODE_LEFT])  light.scene_light_pos[0] -= lms;
+    if(keys[SDL_SCANCODE_RIGHT]) light.scene_light_pos[0] += lms;
 
     /* Pickup collection */
     for(int i=0;i<pickup_count;i++) {
@@ -172,7 +172,7 @@ void player_shoot(void) {
                 /* Check win condition */
                 int alive = 0;
                 for(int j=0;j<enemy_count;j++) alive += enemies[j].alive;
-                if(!alive) game_win = 1;
+                if(!alive) ui.game_win = 1;
             }
         }
     }
